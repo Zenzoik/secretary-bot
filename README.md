@@ -88,5 +88,21 @@ uv run ruff check .
 uv run pytest
 ```
 
+## Схема базы данных
+
+Модели SQLAlchemy находятся в `src/secretary_bot/models.py`, миграции — в
+`migrations/`. Для применения миграций указать PostgreSQL URL с asyncpg в
+`DATABASE_URL` и выполнить:
+
+```bash
+uv run alembic upgrade head
+```
+
+Проверить SQL миграции без подключения к базе:
+
+```bash
+uv run alembic upgrade head --sql
+```
+
 Секреты хранятся только в `.env`, который исключён из Git. Код не пишет тела
 сообщений в логи или файлы.
