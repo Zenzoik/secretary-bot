@@ -4,11 +4,15 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from aiogram.types import BusinessConnection, Update
+from aiogram.types import BusinessConnection, Message, Update
 
-from secretary_bot.hard_filter import HardFilterResult, apply_hard_filter
+from secretary_bot.hard_filter import apply_hard_filter
+from secretary_bot.notifications import parse_feedback
+from secretary_bot.pipeline import IncomingMessage, Pipeline
+from secretary_bot.storage import ConnectionSnapshot, record_feedback, upsert_connection
 
 logger = logging.getLogger(__name__)
 
@@ -18,17 +22,17 @@ class TelegramBot(Protocol):
 
     async def send_message(self, **kwargs: Any) -> Any: ...
 
-    async def read_business_message(
-        self, business_connection_id: str, chat_id: int, message_id: int
-    ) -> bool: ...
+    async def answer_callback_query(self, callback_query_id: str, **kwargs: Any) -> Any: ...
 
 
 @dataclass(slots=True)
 class RuntimeState:
     bot: TelegramBot
-    echo_enabled: bool
-    allowed_chat_ids: frozenset[int]
+    pipeline: Pipeline
     queue_size: int
+    # Optional safety net for early operation: when set, only these chats are
+    # processed. Empty means the FR-2 policy — every chat except exclusions.
+    allowed_chat_ids: frozenset[int] = frozenset()
     connections: dict[str, BusinessConnection] = field(default_factory=dict)
     processed_updates: int = 0
     queue: asyncio.Queue[Update] = field(init=False)
@@ -44,7 +48,7 @@ async def process_updates(state: RuntimeState) -> None:
             await handle_update(update, state)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # keep the PoC worker alive after one bad update
+        except Exception as exc:  # one bad update must not stop the worker
             _log(
                 logging.ERROR,
                 "update_failed",
@@ -58,88 +62,106 @@ async def process_updates(state: RuntimeState) -> None:
 
 async def handle_update(update: Update, state: RuntimeState) -> None:
     if update.business_connection is not None:
-        connection = update.business_connection
-        state.connections[connection.id] = connection
-        _log_connection(connection, update_id=update.update_id)
+        await _store_connection(update.business_connection, state, update_id=update.update_id)
         return
 
-    message = update.business_message
-    if message is None:
-        _log(logging.INFO, "update_ignored", update_id=update.update_id)
+    if update.callback_query is not None:
+        await _handle_feedback(update, state)
         return
 
+    if update.business_message is not None:
+        await _handle_business_message(update.business_message, state, update_id=update.update_id)
+        return
+
+    _log(logging.INFO, "update_ignored", update_id=update.update_id)
+
+
+async def _handle_business_message(
+    message: Message, state: RuntimeState, *, update_id: int
+) -> None:
     connection_id = message.business_connection_id
     if connection_id is None:
-        _log(logging.WARNING, "message_missing_connection", update_id=update.update_id)
+        _log(logging.WARNING, "message_missing_connection", update_id=update_id)
         return
 
-    connection = state.connections.get(connection_id)
-    if connection is None:
-        connection = await state.bot.get_business_connection(connection_id)
-        state.connections[connection.id] = connection
-        _log_connection(connection, update_id=update.update_id, source="api_refresh")
-
-    filter_result = apply_hard_filter(message, owner_user_id=connection.user.id)
-    if filter_result is not HardFilterResult.ALLOWED:
+    connection = await _connection(connection_id, state, update_id=update_id)
+    if state.allowed_chat_ids and message.chat.id not in state.allowed_chat_ids:
         _log(
             logging.INFO,
-            f"message_skipped_{filter_result.value}",
-            update_id=update.update_id,
-        )
-        return
-    if message.chat.id not in state.allowed_chat_ids:
-        _log(
-            logging.WARNING,
             "message_skipped_not_allowlisted",
-            update_id=update.update_id,
+            update_id=update_id,
             chat_id=message.chat.id,
         )
         return
-    if not connection.is_enabled or connection.rights is None or not connection.rights.can_reply:
-        _log(logging.WARNING, "message_skipped_no_reply_right", update_id=update.update_id)
-        return
-    if not state.echo_enabled:
-        _log(logging.INFO, "message_skipped_echo_disabled", update_id=update.update_id)
-        return
 
-    sent = await state.bot.send_message(
+    filter_result = apply_hard_filter(message, owner_user_id=connection.user.id)
+    incoming = IncomingMessage(
         business_connection_id=connection_id,
         chat_id=message.chat.id,
-        text=message.text,
+        message_id=message.message_id,
+        filter_result=filter_result,
+        received_at=message.date.astimezone(UTC) if message.date else datetime.now(UTC),
+        text=message.text or "",
+        contact_name=_contact_name(message),
     )
-    _log(
-        logging.INFO,
-        "echo_sent",
-        update_id=update.update_id,
-        connection_id=connection_id,
-        chat_id=message.chat.id,
-        incoming_message_id=message.message_id,
-        sent_message_id=getattr(sent, "message_id", None),
-    )
+    await state.pipeline.process_incoming(incoming)
 
-    if connection.rights.can_read_messages:
-        try:
-            await state.bot.read_business_message(
-                business_connection_id=connection_id,
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-            )
-        except Exception as exc:
-            _log(
-                logging.WARNING,
-                "message_read_failed",
-                update_id=update.update_id,
-                error_type=type(exc).__name__,
-            )
-        else:
-            _log(
-                logging.INFO,
-                "message_marked_read",
-                update_id=update.update_id,
-                connection_id=connection_id,
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-            )
+
+async def _handle_feedback(update: Update, state: RuntimeState) -> None:
+    query = update.callback_query
+    assert query is not None
+    parsed = parse_feedback(query.data or "")
+    if parsed is None:
+        _log(logging.INFO, "callback_ignored", update_id=update.update_id)
+        return
+
+    log_id, verdict = parsed
+    database = state.pipeline.database
+    async with database.session() as session, session.begin():
+        await record_feedback(session, log_id=log_id, verdict=verdict)
+    _log(logging.INFO, "shadow_feedback", log_id=log_id, verdict=verdict)
+    await state.bot.answer_callback_query(query.id, text="Записал")
+
+
+async def _connection(
+    connection_id: str, state: RuntimeState, *, update_id: int
+) -> BusinessConnection:
+    connection = state.connections.get(connection_id)
+    if connection is not None:
+        return connection
+    connection = await state.bot.get_business_connection(connection_id)
+    await _store_connection(connection, state, update_id=update_id, source="api_refresh")
+    return connection
+
+
+async def _store_connection(
+    connection: BusinessConnection,
+    state: RuntimeState,
+    *,
+    update_id: int,
+    source: str = "update",
+) -> None:
+    state.connections[connection.id] = connection
+    async with state.pipeline.database.session() as session, session.begin():
+        await upsert_connection(
+            session,
+            ConnectionSnapshot(
+                business_connection_id=connection.id,
+                owner_user_id=connection.user.id,
+                owner_chat_id=connection.user_chat_id,
+                owner_username=connection.user.username,
+                rights=connection.rights.model_dump(exclude_none=True) if connection.rights else {},
+                is_enabled=connection.is_enabled,
+            ),
+        )
+    _log_connection(connection, update_id=update_id, source=source)
+
+
+def _contact_name(message: Message) -> str | None:
+    sender = message.from_user
+    if sender is None:
+        return message.chat.first_name
+    return sender.full_name
 
 
 def _log_connection(

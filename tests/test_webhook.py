@@ -1,22 +1,30 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass
 from typing import Any
 
+import pytest
 from aiogram.types import BusinessConnection
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
+from secretary_bot import models
 from secretary_bot.application import create_app
 from secretary_bot.config import Settings
+from secretary_bot.delayed import DelayedReplyQueue
 from secretary_bot.ingest import DeduplicationUnavailable
+from secretary_bot.storage import Database
+from tests.test_delayed import FakeSortedSet
+from tests.test_pipeline import FakeNotifier
 
 SECRET = "test_webhook_secret"
 CONNECTION_UPDATE = {
     "update_id": 1,
     "business_connection": {
         "id": "connection-1",
-        "user": {"id": 42, "is_bot": False, "first_name": "Owner"},
+        "user": {"id": 42, "is_bot": False, "first_name": "Owner", "username": "owner"},
         "user_chat_id": 42,
         "date": 1_700_000_000,
         "rights": {"can_reply": True},
@@ -34,6 +42,15 @@ INCOMING_UPDATE = {
         "text": "sensitive test body",
     },
 }
+FEEDBACK_UPDATE = {
+    "update_id": 3,
+    "callback_query": {
+        "id": "callback-1",
+        "from": {"id": 42, "is_bot": False, "first_name": "Owner"},
+        "chat_instance": "instance",
+        "data": "feedback:1:ok",
+    },
+}
 
 
 @dataclass
@@ -44,8 +61,7 @@ class SentMessage:
 class FakeBot:
     def __init__(self) -> None:
         self.sent: list[dict[str, Any]] = []
-        self.read: list[dict[str, Any]] = []
-        self.fail_read = False
+        self.answered: list[str] = []
         self.connections: dict[str, BusinessConnection] = {}
 
     async def get_business_connection(self, connection_id: str) -> BusinessConnection:
@@ -55,18 +71,8 @@ class FakeBot:
         self.sent.append(kwargs)
         return SentMessage()
 
-    async def read_business_message(
-        self, business_connection_id: str, chat_id: int, message_id: int
-    ) -> bool:
-        self.read.append(
-            {
-                "business_connection_id": business_connection_id,
-                "chat_id": chat_id,
-                "message_id": message_id,
-            }
-        )
-        if self.fail_read:
-            raise RuntimeError("simulated read failure")
+    async def answer_callback_query(self, callback_query_id: str, **kwargs: Any) -> bool:
+        self.answered.append(callback_query_id)
         return True
 
 
@@ -92,19 +98,25 @@ class FailingDeduplicator(FakeDeduplicator):
         raise DeduplicationUnavailable("simulated Redis failure")
 
 
-def make_client(
-    *, echo_enabled: bool = False, deduplicator: FakeDeduplicator | None = None
-) -> tuple[TestClient, FakeBot]:
+@pytest.fixture
+def world(database: Database):
     bot = FakeBot()
+    notifier = FakeNotifier()
+    queue = DelayedReplyQueue(client=FakeSortedSet())
     settings = Settings(
         bot_token="123456:TEST_TOKEN",
         webhook_secret=SECRET,
-        echo_enabled=echo_enabled,
-        allowed_chat_ids=frozenset({100}),
+        database_url="sqlite+aiosqlite:///:memory:",
     )
-    return TestClient(
-        create_app(settings=settings, bot=bot, deduplicator=deduplicator or FakeDeduplicator())
-    ), bot
+    app = create_app(
+        settings=settings,
+        bot=bot,
+        deduplicator=FakeDeduplicator(),
+        database=database,
+        delayed_queue=queue,
+        notifier=notifier,
+    )
+    return TestClient(app), bot, queue, database
 
 
 def post_update(client: TestClient, update: dict[str, Any]) -> Any:
@@ -115,7 +127,7 @@ def post_update(client: TestClient, update: dict[str, Any]) -> Any:
     )
 
 
-def wait_for(predicate: Any, timeout: float = 1.0) -> None:
+def wait_for(predicate: Any, timeout: float = 2.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
@@ -124,8 +136,8 @@ def wait_for(predicate: Any, timeout: float = 1.0) -> None:
     raise AssertionError("background worker did not process the update")
 
 
-def test_health_does_not_expose_secrets() -> None:
-    client, _ = make_client()
+def test_health_does_not_expose_secrets(world) -> None:
+    client, *_ = world
 
     with client:
         response = client.get("/healthz")
@@ -133,8 +145,8 @@ def test_health_does_not_expose_secrets() -> None:
     assert response.status_code == 200
     assert response.json() == {
         "status": "ok",
-        "echo_enabled": False,
-        "allowed_chat_count": 1,
+        "classifier": "keywords",
+        "allowed_chat_count": 0,
         "queue_depth": 0,
         "processed_updates": 0,
         "accepted_updates": 0,
@@ -143,8 +155,8 @@ def test_health_does_not_expose_secrets() -> None:
     assert SECRET not in response.text
 
 
-def test_webhook_rejects_missing_or_wrong_secret() -> None:
-    client, _ = make_client()
+def test_webhook_rejects_missing_or_wrong_secret(world) -> None:
+    client, *_ = world
 
     with client:
         assert client.post("/telegram/webhook", json=CONNECTION_UPDATE).status_code == 403
@@ -158,111 +170,43 @@ def test_webhook_rejects_missing_or_wrong_secret() -> None:
         )
 
 
-def test_webhook_rejects_invalid_update() -> None:
-    client, _ = make_client()
+def test_webhook_rejects_invalid_update(world) -> None:
+    client, *_ = world
 
     with client:
-        response = post_update(client, {"unexpected": "payload"})
-
-    assert response.status_code == 400
+        assert post_update(client, {"unexpected": "payload"}).status_code == 400
 
 
-def test_echo_is_sent_with_business_connection_id() -> None:
-    client, bot = make_client(echo_enabled=True)
+def test_connection_update_is_stored(world) -> None:
+    client, _, _, database = world
 
     with client:
         assert post_update(client, CONNECTION_UPDATE).status_code == 200
-        assert post_update(client, INCOMING_UPDATE).status_code == 200
-        wait_for(lambda: len(bot.sent) == 1)
+        wait_for(lambda: client.app.state.runtime.processed_updates == 1)
 
-    assert bot.sent == [
-        {
-            "business_connection_id": "connection-1",
-            "chat_id": 100,
-            "text": "sensitive test body",
-        }
-    ]
-    assert bot.read == []
+    row = asyncio.run(_first(database, models.Connection))
+    assert row is not None
+    assert row.owner_chat_id == 42
+    assert row.rights_json == {"can_reply": True}
+    assert row.dry_run is True, "a new connection must not answer anyone yet"
 
 
-def test_incoming_message_is_marked_read_after_echo_when_allowed() -> None:
-    client, bot = make_client(echo_enabled=True)
-    connection_update = {
-        **CONNECTION_UPDATE,
-        "business_connection": {
-            **CONNECTION_UPDATE["business_connection"],
-            "rights": {"can_reply": True, "can_read_messages": True},
-        },
-    }
-
-    with client:
-        assert post_update(client, connection_update).status_code == 200
-        assert post_update(client, INCOMING_UPDATE).status_code == 200
-        wait_for(lambda: len(bot.read) == 1)
-
-    assert bot.read == [
-        {
-            "business_connection_id": "connection-1",
-            "chat_id": 100,
-            "message_id": 10,
-        }
-    ]
-
-
-def test_read_failure_does_not_undo_successful_echo(caplog: Any) -> None:
-    client, bot = make_client(echo_enabled=True)
-    bot.fail_read = True
-    connection_update = {
-        **CONNECTION_UPDATE,
-        "business_connection": {
-            **CONNECTION_UPDATE["business_connection"],
-            "rights": {"can_reply": True, "can_read_messages": True},
-        },
-    }
-
-    with client, caplog.at_level("WARNING"):
-        assert post_update(client, connection_update).status_code == 200
-        assert post_update(client, INCOMING_UPDATE).status_code == 200
-        wait_for(lambda: client.app.state.runtime.processed_updates == 2)
-
-    assert len(bot.sent) == 1
-    assert '"event": "message_read_failed"' in caplog.text
-    assert "sensitive test body" not in caplog.text
-
-
-def test_echo_is_not_sent_when_disabled() -> None:
-    client, bot = make_client(echo_enabled=False)
+def test_incoming_message_is_gated_and_never_echoed(world) -> None:
+    client, bot, queue, database = world
 
     with client:
         assert post_update(client, CONNECTION_UPDATE).status_code == 200
         assert post_update(client, INCOMING_UPDATE).status_code == 200
         wait_for(lambda: client.app.state.runtime.processed_updates == 2)
 
+    # No schedule exists yet, so the gate refuses and nothing is sent.
     assert bot.sent == []
+    row = asyncio.run(_first(database, models.MessageLog))
+    assert row is not None and row.action == "skipped_schedule"
 
 
-def test_echo_is_not_sent_to_chat_outside_server_allowlist() -> None:
-    client, bot = make_client(echo_enabled=True)
-    other_chat_update = {
-        **INCOMING_UPDATE,
-        "business_message": {
-            **INCOMING_UPDATE["business_message"],
-            "chat": {"id": 101, "type": "private", "first_name": "Other"},
-            "from": {"id": 101, "is_bot": False, "first_name": "Other"},
-        },
-    }
-
-    with client:
-        assert post_update(client, CONNECTION_UPDATE).status_code == 200
-        assert post_update(client, other_chat_update).status_code == 200
-        wait_for(lambda: client.app.state.runtime.processed_updates == 2)
-
-    assert bot.sent == []
-    assert bot.read == []
-
-
-def test_message_body_is_not_logged(caplog: Any) -> None:
-    client, _ = make_client(echo_enabled=False)
+def test_message_body_is_not_logged(world, caplog: Any) -> None:
+    client, *_ = world
 
     with client, caplog.at_level("INFO"):
         assert post_update(client, CONNECTION_UPDATE).status_code == 200
@@ -272,24 +216,52 @@ def test_message_body_is_not_logged(caplog: Any) -> None:
     assert "sensitive test body" not in caplog.text
 
 
-def test_duplicate_business_message_is_processed_once() -> None:
-    client, bot = make_client(echo_enabled=True)
+def test_feedback_button_is_recorded(world) -> None:
+    client, bot, _, database = world
+
+    with client:
+        assert post_update(client, CONNECTION_UPDATE).status_code == 200
+        assert post_update(client, INCOMING_UPDATE).status_code == 200
+        wait_for(lambda: client.app.state.runtime.processed_updates == 2)
+        assert post_update(client, FEEDBACK_UPDATE).status_code == 200
+        wait_for(lambda: client.app.state.runtime.processed_updates == 3)
+
+    row = asyncio.run(_first(database, models.ShadowFeedback))
+    assert row is not None and row.verdict == "ok"
+    assert bot.answered == ["callback-1"]
+
+
+def test_duplicate_business_message_is_processed_once(world) -> None:
+    client, _, _, database = world
     same_message_with_new_update_id = {**INCOMING_UPDATE, "update_id": 99}
 
     with client:
         assert post_update(client, CONNECTION_UPDATE).status_code == 200
         assert post_update(client, INCOMING_UPDATE).status_code == 200
         assert post_update(client, same_message_with_new_update_id).status_code == 200
-        wait_for(lambda: len(bot.sent) == 1)
+        wait_for(lambda: client.app.state.runtime.processed_updates == 2)
         health = client.get("/healthz").json()
 
-    assert len(bot.sent) == 1
     assert health["accepted_updates"] == 2
     assert health["duplicate_updates"] == 1
 
 
-def test_redis_failure_returns_retryable_status() -> None:
-    client, _ = make_client(deduplicator=FailingDeduplicator())
+def test_redis_failure_returns_retryable_status(database: Database) -> None:
+    settings = Settings(
+        bot_token="123456:TEST_TOKEN",
+        webhook_secret=SECRET,
+        database_url="sqlite+aiosqlite:///:memory:",
+    )
+    client = TestClient(
+        create_app(
+            settings=settings,
+            bot=FakeBot(),
+            deduplicator=FailingDeduplicator(),
+            database=database,
+            delayed_queue=DelayedReplyQueue(client=FakeSortedSet()),
+            notifier=FakeNotifier(),
+        )
+    )
 
     with client:
         response = post_update(client, CONNECTION_UPDATE)
@@ -297,3 +269,8 @@ def test_redis_failure_returns_retryable_status() -> None:
     assert response.status_code == 503
     assert response.json() == {"detail": "ingest unavailable"}
     assert client.app.state.runtime.processed_updates == 0
+
+
+async def _first(database: Database, model: Any) -> Any:
+    async with database.session() as session:
+        return await session.scalar(select(model))

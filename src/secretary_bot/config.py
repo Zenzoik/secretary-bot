@@ -4,9 +4,9 @@ import os
 import re
 from dataclasses import dataclass
 
+from secretary_bot.classifier import DEFAULT_TIMEOUT_SECONDS
+
 _SECRET_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
-_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
-_FALSE_VALUES = frozenset({"0", "false", "no", "off"})
 
 
 class ConfigurationError(ValueError):
@@ -18,12 +18,14 @@ class Settings:
     bot_token: str
     webhook_secret: str
     public_base_url: str | None = None
-    echo_enabled: bool = False
     allowed_chat_ids: frozenset[int] = frozenset()
     log_level: str = "INFO"
     update_queue_size: int = 1000
     redis_url: str = "redis://127.0.0.1:6379/0"
     dedup_ttl_seconds: int = 86400
+    database_url: str = "postgresql+asyncpg://secretary:secretary@127.0.0.1:5432/secretary"
+    anthropic_api_key: str | None = None
+    classifier_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
 
     @property
     def webhook_url(self) -> str:
@@ -52,23 +54,29 @@ class Settings:
         if not redis_url.startswith(("redis://", "rediss://")):
             raise ConfigurationError("REDIS_URL must use redis:// or rediss://")
 
-        echo_enabled = _parse_bool("POC_ECHO_ENABLED", default=False)
-        allowed_chat_ids = _parse_chat_ids(os.getenv("POC_ALLOWED_CHAT_IDS", ""))
-        if echo_enabled and not allowed_chat_ids:
-            raise ConfigurationError(
-                "POC_ALLOWED_CHAT_IDS must contain at least one chat ID when echo is enabled"
-            )
+        database_url = os.getenv(
+            "DATABASE_URL", "postgresql+asyncpg://secretary:secretary@127.0.0.1:5432/secretary"
+        )
+        if "+asyncpg" not in database_url and "+aiosqlite" not in database_url:
+            raise ConfigurationError("DATABASE_URL must use an async driver (postgresql+asyncpg)")
+
+        allowed_chat_ids = _parse_chat_ids(os.getenv("ALLOWED_CHAT_IDS", ""))
+        classifier_timeout = _parse_positive_float(
+            "CLASSIFIER_TIMEOUT_SECONDS", default=DEFAULT_TIMEOUT_SECONDS
+        )
 
         return cls(
             bot_token=bot_token,
             webhook_secret=webhook_secret,
             public_base_url=public_base_url,
-            echo_enabled=echo_enabled,
             allowed_chat_ids=allowed_chat_ids,
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
             update_queue_size=queue_size,
             redis_url=redis_url,
             dedup_ttl_seconds=dedup_ttl_seconds,
+            database_url=database_url,
+            anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or None,
+            classifier_timeout_seconds=classifier_timeout,
         )
 
 
@@ -79,16 +87,17 @@ def _required(name: str) -> str:
     return value
 
 
-def _parse_bool(name: str, *, default: bool) -> bool:
+def _parse_positive_float(name: str, *, default: float) -> float:
     raw = os.getenv(name)
     if raw is None:
         return default
-    normalized = raw.strip().lower()
-    if normalized in _TRUE_VALUES:
-        return True
-    if normalized in _FALSE_VALUES:
-        return False
-    raise ConfigurationError(f"{name} must be a boolean value")
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ConfigurationError(f"{name} must be a number") from exc
+    if value <= 0:
+        raise ConfigurationError(f"{name} must be positive")
+    return value
 
 
 def _parse_positive_int(name: str, *, default: int) -> int:
@@ -111,10 +120,8 @@ def _parse_chat_ids(raw: str) -> frozenset[int]:
         try:
             chat_id = int(item.strip())
         except ValueError as exc:
-            raise ConfigurationError(
-                "POC_ALLOWED_CHAT_IDS must be comma-separated integers"
-            ) from exc
+            raise ConfigurationError("ALLOWED_CHAT_IDS must be comma-separated integers") from exc
         if chat_id <= 0:
-            raise ConfigurationError("POC_ALLOWED_CHAT_IDS must contain positive private chat IDs")
+            raise ConfigurationError("ALLOWED_CHAT_IDS must contain positive private chat IDs")
         chat_ids.add(chat_id)
     return frozenset(chat_ids)

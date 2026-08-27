@@ -10,8 +10,11 @@ from aiogram import Bot
 from aiogram.types import Update
 from fastapi import FastAPI, Header, HTTPException, Request, status
 from pydantic import ValidationError
+from redis.asyncio import Redis
 
+from secretary_bot.classifier import ClassifierSettings, LanguageModel
 from secretary_bot.config import Settings
+from secretary_bot.delayed import DelayedReplyQueue
 from secretary_bot.ingest import (
     DeduplicationUnavailable,
     Deduplicator,
@@ -19,7 +22,14 @@ from secretary_bot.ingest import (
     RedisDeduplicator,
     UpdateIngestor,
 )
+from secretary_bot.llm import AnthropicLanguageModel
+from secretary_bot.morning import MorningDigest
+from secretary_bot.notifications import OwnerNotifier, TelegramOwnerNotifier
+from secretary_bot.pipeline import Pipeline
 from secretary_bot.runtime import RuntimeState, TelegramBot, process_updates
+from secretary_bot.sender import BusinessReplySender
+from secretary_bot.storage import Database
+from secretary_bot.workers import run_delayed_replies, run_morning_digest
 
 
 def create_app(
@@ -27,19 +37,42 @@ def create_app(
     settings: Settings | None = None,
     bot: TelegramBot | None = None,
     deduplicator: Deduplicator | None = None,
+    database: Database | None = None,
+    delayed_queue: DelayedReplyQueue | None = None,
+    notifier: OwnerNotifier | None = None,
+    model: LanguageModel | None = None,
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     owns_bot = bot is None
     telegram_bot = bot or Bot(token=settings.bot_token)
+
     owns_deduplicator = deduplicator is None
     update_deduplicator = deduplicator or RedisDeduplicator.from_url(
         settings.redis_url, ttl_seconds=settings.dedup_ttl_seconds
     )
+    owns_database = database is None
+    connection_database = database or Database.from_url(settings.database_url)
+    owns_redis = delayed_queue is None
+    redis = Redis.from_url(settings.redis_url, decode_responses=True) if owns_redis else None
+    replies = delayed_queue or DelayedReplyQueue(client=redis)  # type: ignore[arg-type]
+
+    language_model = model or _language_model(settings)
+    pipeline = Pipeline(
+        database=connection_database,
+        queue=replies,
+        sender=BusinessReplySender(bot=telegram_bot),
+        notifier=notifier or TelegramOwnerNotifier(bot=telegram_bot),
+        model=language_model,
+        classifier_defaults=ClassifierSettings(timeout_seconds=settings.classifier_timeout_seconds),
+    )
+    digest = MorningDigest(
+        database=connection_database, notifier=notifier or TelegramOwnerNotifier(bot=telegram_bot)
+    )
     state = RuntimeState(
         bot=telegram_bot,
-        echo_enabled=settings.echo_enabled,
-        allowed_chat_ids=settings.allowed_chat_ids,
+        pipeline=pipeline,
         queue_size=settings.update_queue_size,
+        allowed_chat_ids=settings.allowed_chat_ids,
     )
     ingestor = UpdateIngestor(queue=state.queue, deduplicator=update_deduplicator)
 
@@ -49,27 +82,40 @@ def create_app(
             level=settings.log_level,
             format="%(asctime)s %(levelname)s %(name)s %(message)s",
         )
-        worker = asyncio.create_task(process_updates(state), name="telegram-update-worker")
+        tasks = [
+            asyncio.create_task(process_updates(state), name="telegram-update-worker"),
+            asyncio.create_task(
+                run_delayed_replies(pipeline, replies), name="delayed-reply-worker"
+            ),
+            asyncio.create_task(run_morning_digest(digest), name="morning-digest-worker"),
+        ]
         try:
             yield
         finally:
-            worker.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await worker
+            for task in tasks:
+                task.cancel()
+            for task in tasks:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
             if owns_deduplicator:
                 await update_deduplicator.aclose()
+            if owns_redis and redis is not None:
+                await redis.aclose()
+            if owns_database:
+                await connection_database.aclose()
             if owns_bot:
                 await telegram_bot.session.close()  # type: ignore[union-attr]
 
-    app = FastAPI(title="Telegram Secretary Bot PoC", lifespan=lifespan)
+    app = FastAPI(title="Telegram Secretary Bot", lifespan=lifespan)
     app.state.runtime = state
     app.state.ingestor = ingestor
+    app.state.pipeline = pipeline
 
     @app.get("/healthz")
     async def health() -> dict[str, object]:
         return {
             "status": "ok",
-            "echo_enabled": state.echo_enabled,
+            "classifier": "llm" if language_model is not None else "keywords",
             "allowed_chat_count": len(state.allowed_chat_ids),
             "queue_depth": state.queue.qsize(),
             "processed_updates": state.processed_updates,
@@ -105,3 +151,12 @@ def create_app(
         return {"ok": True}
 
     return app
+
+
+def _language_model(settings: Settings) -> LanguageModel | None:
+    """No API key means the keyword dictionary decides — never a crash."""
+    if settings.anthropic_api_key is None:
+        return None
+    return AnthropicLanguageModel.from_api_key(
+        settings.anthropic_api_key, timeout_seconds=settings.classifier_timeout_seconds
+    )
