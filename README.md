@@ -32,6 +32,40 @@ curl --fail http://127.0.0.1:8000/healthz
 uv run secretary-set-webhook
 ```
 
+### Временный публичный URL для PoC
+
+На macOS установить `cloudflared`:
+
+```bash
+brew install cloudflared
+```
+
+Оставить приложение запущенным на порту 8000, открыть второй терминал и выполнить:
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:8000
+```
+
+Команда напечатает адрес вида `https://random-words.trycloudflare.com`. Записать
+его в `.env` без завершающего `/`:
+
+```dotenv
+PUBLIC_BASE_URL=https://random-words.trycloudflare.com
+```
+
+Загрузить обновлённое окружение и зарегистрировать webhook:
+
+```bash
+set -a
+source .env
+set +a
+uv run secretary-set-webhook
+```
+
+Оба процесса — Uvicorn и `cloudflared` — должны продолжать работать. Quick Tunnel
+предназначен только для PoC: после перезапуска `cloudflared` URL изменится, и
+понадобится снова обновить `PUBLIC_BASE_URL` и webhook.
+
 Эхо намеренно отключено по умолчанию. Включать его следует только на время
 контролируемого теста:
 
