@@ -8,6 +8,8 @@ from typing import Any, Protocol
 
 from aiogram.types import BusinessConnection, Update
 
+from secretary_bot.hard_filter import HardFilterResult, apply_hard_filter
+
 logger = logging.getLogger(__name__)
 
 
@@ -77,14 +79,13 @@ async def handle_update(update: Update, state: RuntimeState) -> None:
         state.connections[connection.id] = connection
         _log_connection(connection, update_id=update.update_id, source="api_refresh")
 
-    if message.sender_business_bot is not None:
-        _log(logging.INFO, "message_skipped_bot_echo", update_id=update.update_id)
-        return
-    if message.from_user is not None and message.from_user.id == connection.user.id:
-        _log(logging.INFO, "message_skipped_owner", update_id=update.update_id)
-        return
-    if message.chat.type != "private":
-        _log(logging.INFO, "message_skipped_non_private", update_id=update.update_id)
+    filter_result = apply_hard_filter(message, owner_user_id=connection.user.id)
+    if filter_result is not HardFilterResult.ALLOWED:
+        _log(
+            logging.INFO,
+            f"message_skipped_{filter_result.value}",
+            update_id=update.update_id,
+        )
         return
     if message.chat.id not in state.allowed_chat_ids:
         _log(
@@ -93,9 +94,6 @@ async def handle_update(update: Update, state: RuntimeState) -> None:
             update_id=update.update_id,
             chat_id=message.chat.id,
         )
-        return
-    if message.text is None:
-        _log(logging.INFO, "message_skipped_unsupported", update_id=update.update_id)
         return
     if not connection.is_enabled or connection.rights is None or not connection.rights.can_reply:
         _log(logging.WARNING, "message_skipped_no_reply_right", update_id=update.update_id)
