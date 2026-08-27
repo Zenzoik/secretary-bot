@@ -11,6 +11,9 @@ _ALLOWED_UPDATES = [
     "business_message",
     "edited_business_message",
     "deleted_business_messages",
+    # Verdict buttons under the dry-run preview arrive as callback queries;
+    # without this Telegram silently never delivers them.
+    "callback_query",
 ]
 
 
