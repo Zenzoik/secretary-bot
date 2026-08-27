@@ -255,6 +255,7 @@ CREATE TABLE connections (
     business_connection_id  TEXT UNIQUE NOT NULL,
     owner_user_id           BIGINT NOT NULL,
     owner_username          TEXT,
+    owner_chat_id           BIGINT,                -- личка владельца с ботом: превью dry-run, утренний список
     rights_json             JSONB NOT NULL DEFAULT '{}',
     is_active               BOOLEAN NOT NULL DEFAULT true,
     dry_run                 BOOLEAN NOT NULL DEFAULT true,

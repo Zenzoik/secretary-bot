@@ -20,6 +20,7 @@ secretary-set-webhook = "secretary_bot.configure_webhook:main"
 
 [dependency-groups]
 dev = [
+    "aiosqlite>=0.21,<1",
     "httpx>=0.28,<1",
     "pytest>=8.4,<9",
     "pytest-asyncio>=1.1,<2",

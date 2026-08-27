@@ -48,6 +48,7 @@ class Connection(Base):
     business_connection_id: Mapped[str] = mapped_column(Text, unique=True)
     owner_user_id: Mapped[int] = mapped_column(BigInteger)
     owner_username: Mapped[str | None] = mapped_column(Text)
+    owner_chat_id: Mapped[int | None] = mapped_column(BigInteger)
     rights_json: Mapped[dict[str, Any]] = mapped_column(
         JSON_DOCUMENT, server_default=sql_text("'{}'"), default=dict
     )
