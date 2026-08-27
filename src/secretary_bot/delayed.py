@@ -29,7 +29,6 @@ class ReplyTask:
     contact_id: int
     chat_id: int
     message_id: int
-    log_id: int
     template_code: str
     category: str
     incoming_at: str

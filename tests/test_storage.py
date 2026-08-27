@@ -13,6 +13,7 @@ from secretary_bot.classifier import ClassifierSettings
 from secretary_bot.gate import GateDecision, evaluate_gate
 from secretary_bot.storage import (
     ConnectionSnapshot,
+    claim_window,
     enqueue_morning,
     load_classifier_settings,
     load_connection,
@@ -249,3 +250,15 @@ async def test_classifier_settings_are_owner_editable(session: AsyncSession) -> 
     assert settings.model == "claude-sonnet-5"
     assert settings.confidence_min == Decimal("0.85")
     assert settings.timeout_seconds == 3.0
+
+
+@pytest.mark.asyncio
+async def test_claiming_a_window_blocks_the_next_message_immediately(
+    session: AsyncSession,
+) -> None:
+    connection_id = await stored_connection(session)
+
+    await claim_window(session, connection_id, 100, window_key="2026-08-23:1")
+    state = await load_contact_state(session, connection_id, 100)
+
+    assert state.last_auto_reply_window_key == "2026-08-23:1"

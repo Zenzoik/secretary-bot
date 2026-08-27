@@ -177,6 +177,18 @@ async def record_owner_reply(
     await _touch_activity(session, connection_id, contact_id, owner_last_reply_at=at)
 
 
+async def claim_window(
+    session: AsyncSession, connection_id: int, contact_id: int, *, window_key: str | None
+) -> None:
+    """FR-7: take the window as soon as a reply is scheduled.
+
+    Claiming at delivery time would let five messages sent a minute apart each
+    schedule their own reply. A claim that is later cancelled costs nothing —
+    one missed auto-reply is invisible, five are not.
+    """
+    await _touch_activity(session, connection_id, contact_id, quiet_window_key=window_key)
+
+
 async def record_auto_reply(
     session: AsyncSession,
     connection_id: int,
