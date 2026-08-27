@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -231,6 +232,31 @@ async def enqueue_morning(
     session.add(row)
     await session.flush()
     return row.id
+
+
+async def list_connections(session: AsyncSession) -> list[ConnectionRecord]:
+    rows = await session.scalars(select(models.Connection))
+    return [await _record(session, row) for row in rows]
+
+
+async def pending_morning(session: AsyncSession, connection_id: int) -> list[models.MorningQueue]:
+    rows = await session.scalars(
+        select(models.MorningQueue)
+        .where(
+            models.MorningQueue.connection_id == connection_id,
+            models.MorningQueue.is_delivered.is_(False),
+        )
+        .order_by(models.MorningQueue.occurred_at)
+    )
+    return list(rows)
+
+
+async def mark_morning_delivered(session: AsyncSession, ids: Sequence[int]) -> None:
+    if not ids:
+        return
+    await session.execute(
+        update(models.MorningQueue).where(models.MorningQueue.id.in_(ids)).values(is_delivered=True)
+    )
 
 
 async def record_feedback(session: AsyncSession, *, log_id: int, verdict: str) -> int:
