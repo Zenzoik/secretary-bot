@@ -1,0 +1,159 @@
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from typing import Any
+
+from aiogram.types import BusinessConnection
+from fastapi.testclient import TestClient
+
+from secretary_bot.application import create_app
+from secretary_bot.config import Settings
+
+SECRET = "test_webhook_secret"
+CONNECTION_UPDATE = {
+    "update_id": 1,
+    "business_connection": {
+        "id": "connection-1",
+        "user": {"id": 42, "is_bot": False, "first_name": "Owner"},
+        "user_chat_id": 42,
+        "date": 1_700_000_000,
+        "rights": {"can_reply": True},
+        "is_enabled": True,
+    },
+}
+INCOMING_UPDATE = {
+    "update_id": 2,
+    "business_message": {
+        "message_id": 10,
+        "date": 1_700_000_001,
+        "business_connection_id": "connection-1",
+        "chat": {"id": 100, "type": "private", "first_name": "Contact"},
+        "from": {"id": 100, "is_bot": False, "first_name": "Contact"},
+        "text": "sensitive test body",
+    },
+}
+
+
+@dataclass
+class SentMessage:
+    message_id: int = 11
+
+
+class FakeBot:
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+        self.connections: dict[str, BusinessConnection] = {}
+
+    async def get_business_connection(self, connection_id: str) -> BusinessConnection:
+        return self.connections[connection_id]
+
+    async def send_message(self, **kwargs: Any) -> SentMessage:
+        self.sent.append(kwargs)
+        return SentMessage()
+
+
+def make_client(*, echo_enabled: bool = False) -> tuple[TestClient, FakeBot]:
+    bot = FakeBot()
+    settings = Settings(
+        bot_token="123456:TEST_TOKEN",
+        webhook_secret=SECRET,
+        echo_enabled=echo_enabled,
+    )
+    return TestClient(create_app(settings=settings, bot=bot)), bot
+
+
+def post_update(client: TestClient, update: dict[str, Any]) -> Any:
+    return client.post(
+        "/telegram/webhook",
+        json=update,
+        headers={"X-Telegram-Bot-Api-Secret-Token": SECRET},
+    )
+
+
+def wait_for(predicate: Any, timeout: float = 1.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.01)
+    raise AssertionError("background worker did not process the update")
+
+
+def test_health_does_not_expose_secrets() -> None:
+    client, _ = make_client()
+
+    with client:
+        response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ok",
+        "echo_enabled": False,
+        "queue_depth": 0,
+        "processed_updates": 0,
+    }
+    assert SECRET not in response.text
+
+
+def test_webhook_rejects_missing_or_wrong_secret() -> None:
+    client, _ = make_client()
+
+    with client:
+        assert client.post("/telegram/webhook", json=CONNECTION_UPDATE).status_code == 403
+        assert (
+            client.post(
+                "/telegram/webhook",
+                json=CONNECTION_UPDATE,
+                headers={"X-Telegram-Bot-Api-Secret-Token": "wrong"},
+            ).status_code
+            == 403
+        )
+
+
+def test_webhook_rejects_invalid_update() -> None:
+    client, _ = make_client()
+
+    with client:
+        response = post_update(client, {"unexpected": "payload"})
+
+    assert response.status_code == 400
+
+
+def test_echo_is_sent_with_business_connection_id() -> None:
+    client, bot = make_client(echo_enabled=True)
+
+    with client:
+        assert post_update(client, CONNECTION_UPDATE).status_code == 200
+        assert post_update(client, INCOMING_UPDATE).status_code == 200
+        wait_for(lambda: len(bot.sent) == 1)
+
+    assert bot.sent == [
+        {
+            "business_connection_id": "connection-1",
+            "chat_id": 100,
+            "text": "sensitive test body",
+        }
+    ]
+
+
+def test_echo_is_not_sent_when_disabled() -> None:
+    client, bot = make_client(echo_enabled=False)
+
+    with client:
+        assert post_update(client, CONNECTION_UPDATE).status_code == 200
+        assert post_update(client, INCOMING_UPDATE).status_code == 200
+        wait_for(lambda: client.app.state.runtime.processed_updates == 2)
+
+    assert bot.sent == []
+
+
+def test_message_body_is_not_logged(caplog: Any) -> None:
+    client, _ = make_client(echo_enabled=False)
+
+    with client, caplog.at_level("INFO"):
+        assert post_update(client, CONNECTION_UPDATE).status_code == 200
+        assert post_update(client, INCOMING_UPDATE).status_code == 200
+        wait_for(lambda: client.app.state.runtime.processed_updates == 2)
+
+    assert "sensitive test body" not in caplog.text
