@@ -97,10 +97,15 @@ ALLOWED_CHAT_IDS=123456789
 
 ```bash
 cp .env.example .env
-# BOT_TOKEN, WEBHOOK_SECRET, POSTGRES_PASSWORD, PUBLIC_BASE_URL
+# Обязательны: BOT_TOKEN, WEBHOOK_SECRET, POSTGRES_PASSWORD, PUBLIC_BASE_URL
 docker compose up -d --build
 docker compose logs -f app
 ```
+
+`POSTGRES_PASSWORD` читается из `.env` самим Compose: он создаёт с ним базу и
+подставляет его в `DATABASE_URL` приложения. Значения `DATABASE_URL` и
+`REDIS_URL` из `.env` при запуске в Compose не используются — они нужны только
+для локального запуска без Docker.
 
 Compose поднимает четыре сервиса: PostgreSQL, Redis с включённым AOF, разовую
 задачу `migrate` (`alembic upgrade head`) и приложение. Порт 8000 слушает только
