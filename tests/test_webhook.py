@@ -43,6 +43,8 @@ class SentMessage:
 class FakeBot:
     def __init__(self) -> None:
         self.sent: list[dict[str, Any]] = []
+        self.read: list[dict[str, Any]] = []
+        self.fail_read = False
         self.connections: dict[str, BusinessConnection] = {}
 
     async def get_business_connection(self, connection_id: str) -> BusinessConnection:
@@ -51,6 +53,20 @@ class FakeBot:
     async def send_message(self, **kwargs: Any) -> SentMessage:
         self.sent.append(kwargs)
         return SentMessage()
+
+    async def read_business_message(
+        self, business_connection_id: str, chat_id: int, message_id: int
+    ) -> bool:
+        self.read.append(
+            {
+                "business_connection_id": business_connection_id,
+                "chat_id": chat_id,
+                "message_id": message_id,
+            }
+        )
+        if self.fail_read:
+            raise RuntimeError("simulated read failure")
+        return True
 
 
 def make_client(*, echo_enabled: bool = False) -> tuple[TestClient, FakeBot]:
@@ -135,6 +151,52 @@ def test_echo_is_sent_with_business_connection_id() -> None:
             "text": "sensitive test body",
         }
     ]
+    assert bot.read == []
+
+
+def test_incoming_message_is_marked_read_after_echo_when_allowed() -> None:
+    client, bot = make_client(echo_enabled=True)
+    connection_update = {
+        **CONNECTION_UPDATE,
+        "business_connection": {
+            **CONNECTION_UPDATE["business_connection"],
+            "rights": {"can_reply": True, "can_read_messages": True},
+        },
+    }
+
+    with client:
+        assert post_update(client, connection_update).status_code == 200
+        assert post_update(client, INCOMING_UPDATE).status_code == 200
+        wait_for(lambda: len(bot.read) == 1)
+
+    assert bot.read == [
+        {
+            "business_connection_id": "connection-1",
+            "chat_id": 100,
+            "message_id": 10,
+        }
+    ]
+
+
+def test_read_failure_does_not_undo_successful_echo(caplog: Any) -> None:
+    client, bot = make_client(echo_enabled=True)
+    bot.fail_read = True
+    connection_update = {
+        **CONNECTION_UPDATE,
+        "business_connection": {
+            **CONNECTION_UPDATE["business_connection"],
+            "rights": {"can_reply": True, "can_read_messages": True},
+        },
+    }
+
+    with client, caplog.at_level("WARNING"):
+        assert post_update(client, connection_update).status_code == 200
+        assert post_update(client, INCOMING_UPDATE).status_code == 200
+        wait_for(lambda: client.app.state.runtime.processed_updates == 2)
+
+    assert len(bot.sent) == 1
+    assert '"event": "message_read_failed"' in caplog.text
+    assert "sensitive test body" not in caplog.text
 
 
 def test_echo_is_not_sent_when_disabled() -> None:

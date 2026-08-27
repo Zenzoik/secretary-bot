@@ -16,6 +16,10 @@ class TelegramBot(Protocol):
 
     async def send_message(self, **kwargs: Any) -> Any: ...
 
+    async def read_business_message(
+        self, business_connection_id: str, chat_id: int, message_id: int
+    ) -> bool: ...
+
 
 @dataclass(slots=True)
 class RuntimeState:
@@ -105,6 +109,30 @@ async def handle_update(update: Update, state: RuntimeState) -> None:
         incoming_message_id=message.message_id,
         sent_message_id=getattr(sent, "message_id", None),
     )
+
+    if connection.rights.can_read_messages:
+        try:
+            await state.bot.read_business_message(
+                business_connection_id=connection_id,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+            )
+        except Exception as exc:
+            _log(
+                logging.WARNING,
+                "message_read_failed",
+                update_id=update.update_id,
+                error_type=type(exc).__name__,
+            )
+        else:
+            _log(
+                logging.INFO,
+                "message_marked_read",
+                update_id=update.update_id,
+                connection_id=connection_id,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+            )
 
 
 def _log_connection(
