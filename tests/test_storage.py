@@ -262,3 +262,38 @@ async def test_claiming_a_window_blocks_the_next_message_immediately(
     state = await load_contact_state(session, connection_id, 100)
 
     assert state.last_auto_reply_window_key == "2026-08-23:1"
+
+
+@pytest.mark.asyncio
+async def test_reconnecting_keeps_the_owners_settings(session: AsyncSession) -> None:
+    first = await upsert_connection(session, SNAPSHOT)
+    session.add(
+        models.Schedule(
+            connection_id=first.id, weekday_mask=127, time_from=time(22, 0), time_to=time(8, 0)
+        )
+    )
+    await session.flush()
+
+    # The owner switches the bot off and on; Telegram issues a new id.
+    await upsert_connection(
+        session, ConnectionSnapshot("connection-1", owner_user_id=42, is_enabled=False)
+    )
+    reconnected = await upsert_connection(
+        session,
+        ConnectionSnapshot("connection-2", owner_user_id=42, owner_chat_id=42),
+    )
+
+    assert reconnected.id == first.id, "a reconnect must not orphan the schedule"
+    assert len(reconnected.policy.windows) == 1
+    assert reconnected.policy.is_active is True
+
+
+@pytest.mark.asyncio
+async def test_a_second_owner_gets_a_row_of_their_own(session: AsyncSession) -> None:
+    first = await upsert_connection(session, SNAPSHOT)
+
+    other = await upsert_connection(
+        session, ConnectionSnapshot("connection-9", owner_user_id=99, owner_chat_id=99)
+    )
+
+    assert other.id != first.id

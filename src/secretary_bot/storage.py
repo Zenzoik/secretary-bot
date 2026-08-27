@@ -67,8 +67,16 @@ async def upsert_connection(
     """Create or refresh the connection row; ``is_enabled=false`` marks it dead."""
     row = await _connection_row(session, snapshot.business_connection_id)
     if row is None:
-        row = models.Connection(business_connection_id=snapshot.business_connection_id)
-        session.add(row)
+        row = await _owner_row(session, snapshot.owner_user_id)
+        if row is None:
+            row = models.Connection(business_connection_id=snapshot.business_connection_id)
+            session.add(row)
+        else:
+            # Telegram issues a new business_connection_id when the owner
+            # reconnects the bot. Adopting the existing row keeps schedules,
+            # exclusions, templates and history attached to the same owner
+            # instead of orphaning them behind a dead connection.
+            row.business_connection_id = snapshot.business_connection_id
 
     row.owner_user_id = snapshot.owner_user_id
     row.owner_username = snapshot.owner_username
@@ -273,6 +281,15 @@ async def _connection_row(
         select(models.Connection).where(
             models.Connection.business_connection_id == business_connection_id
         )
+    )
+
+
+async def _owner_row(session: AsyncSession, owner_user_id: int) -> models.Connection | None:
+    return await session.scalar(
+        select(models.Connection)
+        .where(models.Connection.owner_user_id == owner_user_id)
+        .order_by(models.Connection.id.desc())
+        .limit(1)
     )
 
 
