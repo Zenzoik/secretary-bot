@@ -19,6 +19,7 @@ class Settings:
     webhook_secret: str
     public_base_url: str | None = None
     echo_enabled: bool = False
+    allowed_chat_ids: frozenset[int] = frozenset()
     log_level: str = "INFO"
     update_queue_size: int = 1000
 
@@ -51,11 +52,19 @@ class Settings:
         if queue_size < 1:
             raise ConfigurationError("UPDATE_QUEUE_SIZE must be positive")
 
+        echo_enabled = _parse_bool("POC_ECHO_ENABLED", default=False)
+        allowed_chat_ids = _parse_chat_ids(os.getenv("POC_ALLOWED_CHAT_IDS", ""))
+        if echo_enabled and not allowed_chat_ids:
+            raise ConfigurationError(
+                "POC_ALLOWED_CHAT_IDS must contain at least one chat ID when echo is enabled"
+            )
+
         return cls(
             bot_token=bot_token,
             webhook_secret=webhook_secret,
             public_base_url=public_base_url,
-            echo_enabled=_parse_bool("POC_ECHO_ENABLED", default=False),
+            echo_enabled=echo_enabled,
+            allowed_chat_ids=allowed_chat_ids,
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
             update_queue_size=queue_size,
         )
@@ -78,3 +87,21 @@ def _parse_bool(name: str, *, default: bool) -> bool:
     if normalized in _FALSE_VALUES:
         return False
     raise ConfigurationError(f"{name} must be a boolean value")
+
+
+def _parse_chat_ids(raw: str) -> frozenset[int]:
+    if not raw.strip():
+        return frozenset()
+
+    chat_ids: set[int] = set()
+    for item in raw.split(","):
+        try:
+            chat_id = int(item.strip())
+        except ValueError as exc:
+            raise ConfigurationError(
+                "POC_ALLOWED_CHAT_IDS must be comma-separated integers"
+            ) from exc
+        if chat_id <= 0:
+            raise ConfigurationError("POC_ALLOWED_CHAT_IDS must contain positive private chat IDs")
+        chat_ids.add(chat_id)
+    return frozenset(chat_ids)

@@ -22,6 +22,7 @@ def create_app(*, settings: Settings | None = None, bot: TelegramBot | None = No
     state = RuntimeState(
         bot=telegram_bot,
         echo_enabled=settings.echo_enabled,
+        allowed_chat_ids=settings.allowed_chat_ids,
         queue_size=settings.update_queue_size,
     )
 
@@ -49,6 +50,7 @@ def create_app(*, settings: Settings | None = None, bot: TelegramBot | None = No
         return {
             "status": "ok",
             "echo_enabled": state.echo_enabled,
+            "allowed_chat_count": len(state.allowed_chat_ids),
             "queue_depth": state.queue.qsize(),
             "processed_updates": state.processed_updates,
         }

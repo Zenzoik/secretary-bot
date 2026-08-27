@@ -25,6 +25,7 @@ class TelegramBot(Protocol):
 class RuntimeState:
     bot: TelegramBot
     echo_enabled: bool
+    allowed_chat_ids: frozenset[int]
     queue_size: int
     connections: dict[str, BusinessConnection] = field(default_factory=dict)
     processed_updates: int = 0
@@ -84,6 +85,14 @@ async def handle_update(update: Update, state: RuntimeState) -> None:
         return
     if message.chat.type != "private":
         _log(logging.INFO, "message_skipped_non_private", update_id=update.update_id)
+        return
+    if message.chat.id not in state.allowed_chat_ids:
+        _log(
+            logging.WARNING,
+            "message_skipped_not_allowlisted",
+            update_id=update.update_id,
+            chat_id=message.chat.id,
+        )
         return
     if message.text is None:
         _log(logging.INFO, "message_skipped_unsupported", update_id=update.update_id)

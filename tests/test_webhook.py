@@ -75,6 +75,7 @@ def make_client(*, echo_enabled: bool = False) -> tuple[TestClient, FakeBot]:
         bot_token="123456:TEST_TOKEN",
         webhook_secret=SECRET,
         echo_enabled=echo_enabled,
+        allowed_chat_ids=frozenset({100}),
     )
     return TestClient(create_app(settings=settings, bot=bot)), bot
 
@@ -106,6 +107,7 @@ def test_health_does_not_expose_secrets() -> None:
     assert response.json() == {
         "status": "ok",
         "echo_enabled": False,
+        "allowed_chat_count": 1,
         "queue_depth": 0,
         "processed_updates": 0,
     }
@@ -208,6 +210,26 @@ def test_echo_is_not_sent_when_disabled() -> None:
         wait_for(lambda: client.app.state.runtime.processed_updates == 2)
 
     assert bot.sent == []
+
+
+def test_echo_is_not_sent_to_chat_outside_server_allowlist() -> None:
+    client, bot = make_client(echo_enabled=True)
+    other_chat_update = {
+        **INCOMING_UPDATE,
+        "business_message": {
+            **INCOMING_UPDATE["business_message"],
+            "chat": {"id": 101, "type": "private", "first_name": "Other"},
+            "from": {"id": 101, "is_bot": False, "first_name": "Other"},
+        },
+    }
+
+    with client:
+        assert post_update(client, CONNECTION_UPDATE).status_code == 200
+        assert post_update(client, other_chat_update).status_code == 200
+        wait_for(lambda: client.app.state.runtime.processed_updates == 2)
+
+    assert bot.sent == []
+    assert bot.read == []
 
 
 def test_message_body_is_not_logged(caplog: Any) -> None:

@@ -30,3 +30,25 @@ def test_public_url_requires_https(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(ConfigurationError, match="HTTPS"):
         Settings.from_env()
+
+
+def test_echo_requires_at_least_one_allowlisted_chat(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "123456:TEST_TOKEN")
+    monkeypatch.setenv("WEBHOOK_SECRET", "valid_secret")
+    monkeypatch.setenv("POC_ECHO_ENABLED", "true")
+    monkeypatch.delenv("POC_ALLOWED_CHAT_IDS", raising=False)
+
+    with pytest.raises(ConfigurationError, match="POC_ALLOWED_CHAT_IDS"):
+        Settings.from_env()
+
+
+def test_allowed_chat_ids_are_parsed_and_deduplicated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "123456:TEST_TOKEN")
+    monkeypatch.setenv("WEBHOOK_SECRET", "valid_secret")
+    monkeypatch.setenv("POC_ALLOWED_CHAT_IDS", "100, 200,100")
+
+    settings = Settings.from_env()
+
+    assert settings.allowed_chat_ids == frozenset({100, 200})
