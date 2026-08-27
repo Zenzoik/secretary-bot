@@ -52,3 +52,21 @@ def test_allowed_chat_ids_are_parsed_and_deduplicated(
     settings = Settings.from_env()
 
     assert settings.allowed_chat_ids == frozenset({100, 200})
+
+
+def test_redis_url_requires_redis_scheme(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "123456:TEST_TOKEN")
+    monkeypatch.setenv("WEBHOOK_SECRET", "valid_secret")
+    monkeypatch.setenv("REDIS_URL", "http://localhost:6379")
+
+    with pytest.raises(ConfigurationError, match="REDIS_URL"):
+        Settings.from_env()
+
+
+def test_dedup_ttl_must_be_positive(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "123456:TEST_TOKEN")
+    monkeypatch.setenv("WEBHOOK_SECRET", "valid_secret")
+    monkeypatch.setenv("DEDUP_TTL_SECONDS", "0")
+
+    with pytest.raises(ConfigurationError, match="DEDUP_TTL_SECONDS"):
+        Settings.from_env()

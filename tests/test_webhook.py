@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from secretary_bot.application import create_app
 from secretary_bot.config import Settings
+from secretary_bot.ingest import DeduplicationUnavailable
 
 SECRET = "test_webhook_secret"
 CONNECTION_UPDATE = {
@@ -69,7 +70,31 @@ class FakeBot:
         return True
 
 
-def make_client(*, echo_enabled: bool = False) -> tuple[TestClient, FakeBot]:
+class FakeDeduplicator:
+    def __init__(self) -> None:
+        self.keys: set[str] = set()
+
+    async def claim(self, key: str) -> bool:
+        if key in self.keys:
+            return False
+        self.keys.add(key)
+        return True
+
+    async def release(self, key: str) -> None:
+        self.keys.discard(key)
+
+    async def aclose(self) -> None:
+        return None
+
+
+class FailingDeduplicator(FakeDeduplicator):
+    async def claim(self, key: str) -> bool:
+        raise DeduplicationUnavailable("simulated Redis failure")
+
+
+def make_client(
+    *, echo_enabled: bool = False, deduplicator: FakeDeduplicator | None = None
+) -> tuple[TestClient, FakeBot]:
     bot = FakeBot()
     settings = Settings(
         bot_token="123456:TEST_TOKEN",
@@ -77,7 +102,9 @@ def make_client(*, echo_enabled: bool = False) -> tuple[TestClient, FakeBot]:
         echo_enabled=echo_enabled,
         allowed_chat_ids=frozenset({100}),
     )
-    return TestClient(create_app(settings=settings, bot=bot)), bot
+    return TestClient(
+        create_app(settings=settings, bot=bot, deduplicator=deduplicator or FakeDeduplicator())
+    ), bot
 
 
 def post_update(client: TestClient, update: dict[str, Any]) -> Any:
@@ -110,6 +137,8 @@ def test_health_does_not_expose_secrets() -> None:
         "allowed_chat_count": 1,
         "queue_depth": 0,
         "processed_updates": 0,
+        "accepted_updates": 0,
+        "duplicate_updates": 0,
     }
     assert SECRET not in response.text
 
@@ -241,3 +270,30 @@ def test_message_body_is_not_logged(caplog: Any) -> None:
         wait_for(lambda: client.app.state.runtime.processed_updates == 2)
 
     assert "sensitive test body" not in caplog.text
+
+
+def test_duplicate_business_message_is_processed_once() -> None:
+    client, bot = make_client(echo_enabled=True)
+    same_message_with_new_update_id = {**INCOMING_UPDATE, "update_id": 99}
+
+    with client:
+        assert post_update(client, CONNECTION_UPDATE).status_code == 200
+        assert post_update(client, INCOMING_UPDATE).status_code == 200
+        assert post_update(client, same_message_with_new_update_id).status_code == 200
+        wait_for(lambda: len(bot.sent) == 1)
+        health = client.get("/healthz").json()
+
+    assert len(bot.sent) == 1
+    assert health["accepted_updates"] == 2
+    assert health["duplicate_updates"] == 1
+
+
+def test_redis_failure_returns_retryable_status() -> None:
+    client, _ = make_client(deduplicator=FailingDeduplicator())
+
+    with client:
+        response = post_update(client, CONNECTION_UPDATE)
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "ingest unavailable"}
+    assert client.app.state.runtime.processed_updates == 0

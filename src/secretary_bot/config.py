@@ -22,6 +22,8 @@ class Settings:
     allowed_chat_ids: frozenset[int] = frozenset()
     log_level: str = "INFO"
     update_queue_size: int = 1000
+    redis_url: str = "redis://127.0.0.1:6379/0"
+    dedup_ttl_seconds: int = 86400
 
     @property
     def webhook_url(self) -> str:
@@ -44,13 +46,11 @@ class Settings:
         if public_base_url is not None and not public_base_url.startswith("https://"):
             raise ConfigurationError("PUBLIC_BASE_URL must use HTTPS")
 
-        queue_size_raw = os.getenv("UPDATE_QUEUE_SIZE", "1000")
-        try:
-            queue_size = int(queue_size_raw)
-        except ValueError as exc:
-            raise ConfigurationError("UPDATE_QUEUE_SIZE must be an integer") from exc
-        if queue_size < 1:
-            raise ConfigurationError("UPDATE_QUEUE_SIZE must be positive")
+        queue_size = _parse_positive_int("UPDATE_QUEUE_SIZE", default=1000)
+        dedup_ttl_seconds = _parse_positive_int("DEDUP_TTL_SECONDS", default=86400)
+        redis_url = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+        if not redis_url.startswith(("redis://", "rediss://")):
+            raise ConfigurationError("REDIS_URL must use redis:// or rediss://")
 
         echo_enabled = _parse_bool("POC_ECHO_ENABLED", default=False)
         allowed_chat_ids = _parse_chat_ids(os.getenv("POC_ALLOWED_CHAT_IDS", ""))
@@ -67,6 +67,8 @@ class Settings:
             allowed_chat_ids=allowed_chat_ids,
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
             update_queue_size=queue_size,
+            redis_url=redis_url,
+            dedup_ttl_seconds=dedup_ttl_seconds,
         )
 
 
@@ -87,6 +89,17 @@ def _parse_bool(name: str, *, default: bool) -> bool:
     if normalized in _FALSE_VALUES:
         return False
     raise ConfigurationError(f"{name} must be a boolean value")
+
+
+def _parse_positive_int(name: str, *, default: int) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ConfigurationError(f"{name} must be an integer") from exc
+    if value < 1:
+        raise ConfigurationError(f"{name} must be positive")
+    return value
 
 
 def _parse_chat_ids(raw: str) -> frozenset[int]:

@@ -19,6 +19,9 @@ uv sync --dev
 uv run uvicorn secretary_bot.application:create_app --factory --host 0.0.0.0 --port 8000
 ```
 
+Для ingest нужен Redis по адресу `REDIS_URL`. Он хранит только технические
+дедуп-ключи на 24 часа; тела Telegram-сообщений остаются в памяти процесса.
+
 Проверка процесса:
 
 ```bash
