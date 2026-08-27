@@ -93,12 +93,45 @@ ALLOWED_CHAT_IDS=123456789
 Пошаговая ручная проверка и журнал результатов находятся в
 [`docs/stage-0-poc.md`](docs/stage-0-poc.md).
 
+## Запуск в Docker
+
+```bash
+cp .env.example .env
+# BOT_TOKEN, WEBHOOK_SECRET, POSTGRES_PASSWORD, PUBLIC_BASE_URL
+docker compose up -d --build
+docker compose logs -f app
+```
+
+Compose поднимает четыре сервиса: PostgreSQL, Redis с включённым AOF, разовую
+задачу `migrate` (`alembic upgrade head`) и приложение. Порт 8000 слушает только
+127.0.0.1 — публичный HTTPS отдаёт реверс-прокси на хосте, он же держит
+сертификат и передаёт запросы на webhook.
+
+После первого запуска зарегистрировать webhook:
+
+```bash
+docker compose exec app secretary-set-webhook
+```
+
+Обновление на VPS:
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+`migrate` выполняется до старта приложения, тома `postgres-data` и `redis-data`
+переживают пересборку: отложенные ответы не теряются.
+
 ## Автоматические проверки
 
 ```bash
 uv run ruff check .
 uv run pytest
+uv run pytest --cov=secretary_bot.gate --cov-branch --cov-report=term-missing tests/test_gate.py
 ```
+
+Последняя команда держит требование Этапа 1: покрытие ветвлений gate — 100%.
 
 ## Схема базы данных
 
