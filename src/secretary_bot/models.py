@@ -25,6 +25,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import JSON
 
+from secretary_bot.actions import ACTION_SQL_LIST
+
 NAMING_CONVENTION = {
     "ix": "ix_%(table_name)s_%(column_0_N_name)s",
     "uq": "uq_%(table_name)s_%(column_0_N_name)s",
@@ -152,11 +154,7 @@ class MessageLog(Base):
     __tablename__ = "message_log"
     __table_args__ = (
         CheckConstraint("direction IN ('in', 'out')", name="direction_values"),
-        CheckConstraint(
-            "action IN ('replied', 'dry_run', 'skipped_schedule', "
-            "'skipped_excluded', 'skipped_owner_replied', 'skipped_window_limit', 'error')",
-            name="action_values",
-        ),
+        CheckConstraint(f"action IN ({ACTION_SQL_LIST})", name="action_values"),
         CheckConstraint(
             "category IS NULL OR category IN ('money', 'general')", name="category_values"
         ),

@@ -340,7 +340,9 @@ CREATE TABLE message_log (
     occurred_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     action            TEXT NOT NULL,      -- 'replied' | 'dry_run' | 'skipped_schedule'
                                           -- | 'skipped_excluded' | 'skipped_owner_replied'
-                                          -- | 'skipped_window_limit' | 'error'
+                                          -- | 'skipped_window_limit' | 'skipped_inactive'
+                                          -- | 'skipped_kill_switch'
+                                          -- | 'skipped_unsupported_content' | 'error'
     category          TEXT,               -- 'money' | 'general'
     confidence        NUMERIC(3,2),
     template_code     TEXT,
@@ -379,6 +381,7 @@ CREATE TABLE shadow_feedback (
 ### Заметки по схеме
 
 - **`body_encrypted` и `retention_until` заведены заранее** и в MVP не заполняются. Это чтобы на Этапе 4 не мигрировать боевую таблицу.
+- **Список `action` живёт в коде** (`secretary_bot.actions.LogAction`) и в CHECK-констрейнте: каждое решение пайплайна, включая `/off` и неподдерживаемый контент, имеет своё значение — FR-13 требует лог всех решений, а не только отправок.
 - **`quiet_window_key`** — строковый идентификатор конкретного ночного окна. Позволяет реализовать «один ответ на окно» без арифметики с часами.
 - **Мультиарендность заложена**: всё привязано к `connection_id`. Один инстанс обслуживает нескольких владельцев без переделки, если продукт пойдёт дальше личного использования.
 - Данные разных `connection_id` изолированы на уровне запросов; при выходе за пределы личного использования — вынести тела сообщений в отдельную БД.
