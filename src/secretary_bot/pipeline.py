@@ -142,7 +142,12 @@ class Pipeline:
         )
 
     async def deliver(self, task: ReplyTask, *, now: datetime | None = None) -> LogAction:
-        """Steps 5–9: the owner may have answered; otherwise send or preview."""
+        """Steps 5–9: the owner may have answered; otherwise send or preview.
+
+        Telegram calls happen between transactions, never inside one: a flood
+        wait can pause a send for a minute, and no database transaction should
+        be held open for that long.
+        """
         moment = now or datetime.now(UTC)
         async with self.database.session() as session, session.begin():
             connection = await load_connection(session, task.business_connection_id)
@@ -150,75 +155,60 @@ class Pipeline:
                 _log(logging.WARNING, "unknown_connection", connection_id=task.connection_id)
                 return LogAction.ERROR
 
-            blocked = _blocked(connection)
-            if blocked is not None:
-                await self._log_task(session, connection, task, blocked)
-                return blocked
-
-            if await owner_replied_since(
-                session, connection.id, task.contact_id, moment=task.incoming_moment
-            ):
-                await self._log_task(session, connection, task, LogAction.SKIPPED_OWNER_REPLIED)
-                return LogAction.SKIPPED_OWNER_REPLIED
+            refusal = _blocked(connection) or await _owner_answered(session, connection, task)
+            if refusal is not None:
+                await self._log_task(session, connection, task, refusal)
+                return refusal
 
             overrides = await load_templates(session, connection.id)
-            text = render(TemplateCode(task.template_code), overrides=overrides)
 
-            if connection.dry_run:
-                return await self._preview(session, connection, task, text, at=moment)
-            return await self._send(session, connection, task, text, at=moment)
+        text = render(TemplateCode(task.template_code), overrides=overrides)
+        if connection.dry_run:
+            return await self._preview(connection, task, text, at=moment)
+        return await self._send(connection, task, text, at=moment)
 
     async def _send(
-        self,
-        session: AsyncSession,
-        connection: ConnectionRecord,
-        task: ReplyTask,
-        text: str,
-        *,
-        at: datetime,
+        self, connection: ConnectionRecord, task: ReplyTask, text: str, *, at: datetime
     ) -> LogAction:
         result = await self.sender.send(
             business_connection_id=connection.business_connection_id,
             chat_id=task.chat_id,
             text=text,
         )
-        if not result.is_sent:
-            if result.outcome is SendOutcome.CONNECTION_INVALID:
-                await self._alert(connection, CONNECTION_LOST_ALERT)
-            await self._log_task(
-                session, connection, task, LogAction.ERROR, error_code=result.error_code
-            )
-            return LogAction.ERROR
+        async with self.database.session() as session, session.begin():
+            if not result.is_sent:
+                await self._log_task(
+                    session, connection, task, LogAction.ERROR, error_code=result.error_code
+                )
+            else:
+                await record_auto_reply(
+                    session, connection.id, task.contact_id, at=at, window_key=task.window_key
+                )
+                await self._log_task(
+                    session,
+                    connection,
+                    task,
+                    LogAction.REPLIED,
+                    direction="out",
+                    tg_message_id=result.message_id,
+                )
+                await self._flag_money(session, connection, task)
 
-        await record_auto_reply(
-            session, connection.id, task.contact_id, at=at, window_key=task.window_key
-        )
-        await self._log_task(
-            session,
-            connection,
-            task,
-            LogAction.REPLIED,
-            direction="out",
-            tg_message_id=result.message_id,
-        )
-        await self._flag_money(session, connection, task)
-        return LogAction.REPLIED
+        if result.outcome is SendOutcome.CONNECTION_INVALID:
+            await self._alert(connection, CONNECTION_LOST_ALERT)
+        return LogAction.REPLIED if result.is_sent else LogAction.ERROR
 
     async def _preview(
-        self,
-        session: AsyncSession,
-        connection: ConnectionRecord,
-        task: ReplyTask,
-        text: str,
-        *,
-        at: datetime,
+        self, connection: ConnectionRecord, task: ReplyTask, text: str, *, at: datetime
     ) -> LogAction:
         """FR-11: the contact gets nothing; the owner gets the would-be answer."""
-        await record_auto_reply(
-            session, connection.id, task.contact_id, at=at, window_key=task.window_key
-        )
-        log_id = await self._log_task(session, connection, task, LogAction.DRY_RUN)
-        await self._flag_money(session, connection, task)
+        async with self.database.session() as session, session.begin():
+            await record_auto_reply(
+                session, connection.id, task.contact_id, at=at, window_key=task.window_key
+            )
+            log_id = await self._log_task(session, connection, task, LogAction.DRY_RUN)
+            await self._flag_money(session, connection, task)
+
         if connection.owner_chat_id is None:
             _log(logging.WARNING, "owner_chat_unknown", connection_id=connection.id)
             return LogAction.DRY_RUN
@@ -315,6 +305,16 @@ class Pipeline:
             error_code=error_code,
         )
         return log_id
+
+
+async def _owner_answered(
+    session: AsyncSession, connection: ConnectionRecord, task: ReplyTask
+) -> LogAction | None:
+    """FR-9: a live answer during the delay wins over the auto-reply."""
+    replied = await owner_replied_since(
+        session, connection.id, task.contact_id, moment=task.incoming_moment
+    )
+    return LogAction.SKIPPED_OWNER_REPLIED if replied else None
 
 
 def _blocked(connection: ConnectionRecord) -> LogAction | None:
