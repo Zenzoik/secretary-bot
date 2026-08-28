@@ -56,6 +56,7 @@ def test_message_log_has_no_plaintext_body_column() -> None:
 
 def test_critical_domain_checks_are_present() -> None:
     expected = {
+        "connections": {"ck_connections_control_state_values"},
         "schedules": {"ck_schedules_weekday_mask_range"},
         "overrides": {"ck_overrides_mode_values"},
         "prompts": {"ck_prompts_confidence_min_range"},

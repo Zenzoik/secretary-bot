@@ -5,7 +5,14 @@ from datetime import UTC, datetime, time, timedelta
 from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+)
 
 from secretary_bot.callbacks import finalize_callback
 from secretary_bot.storage import (
@@ -21,11 +28,29 @@ from secretary_bot.storage import (
     set_connection_control,
     set_contact_exclusion,
     set_contact_template_override,
+    set_control_state,
 )
 from secretary_bot.templates import DEFAULT_TEMPLATES, TemplateCode
 
 MAX_MUTE_HOURS = 168
 LIVE_CONFIRMATION_TTL = timedelta(minutes=5)
+
+BUTTON_STATUS = "📊 Статус"
+BUTTON_TODAY = "🗓 Сегодня"
+BUTTON_OFF = "⛔ Выключить"
+BUTTON_ON = "▶️ Включить"
+BUTTON_MUTE = "⏸ Пауза"
+BUTTON_LIVE = "⚠️ Включить live"
+BUTTON_LIVE_ACTIVE = "🔴 Live включён"
+BUTTON_BACK = "↩️ Назад"
+BUTTON_LIVE_CONFIRM = "⚠️ Подтверждаю live"
+BUTTON_CANCEL = "Отмена"
+MUTE_BUTTONS = {
+    "1 час": 1,
+    "3 часа": 3,
+    "8 часов": 8,
+    "24 часа": 24,
+}
 
 
 class ControlBot(Protocol):
@@ -33,11 +58,15 @@ class ControlBot(Protocol):
 
     async def answer_callback_query(self, callback_query_id: str, **kwargs: Any) -> Any: ...
 
+    async def edit_message_text(self, **kwargs: Any) -> Any: ...
+
+    async def edit_message_reply_markup(self, **kwargs: Any) -> Any: ...
+
 
 @dataclass(frozen=True, slots=True)
 class ControlResponse:
     text: str
-    reply_markup: InlineKeyboardMarkup | None = None
+    reply_markup: InlineKeyboardMarkup | ReplyKeyboardMarkup | None = None
 
 
 @dataclass(slots=True)
@@ -47,13 +76,8 @@ class ControlPlane:
 
     async def handle_message(self, message: Message, *, now: datetime | None = None) -> bool:
         """Handle a private owner command; return whether it belonged to us."""
-        parsed = _parse_command(message.text)
         sender = message.from_user
-        if parsed is None or sender is None or message.chat.type != "private":
-            return False
-
-        command, argument = parsed
-        if command not in {"start", "status", "off", "on", "mute", "today", "live"}:
+        if not message.text or sender is None or message.chat.type != "private":
             return False
 
         moment = now or datetime.now(UTC)
@@ -63,6 +87,11 @@ class ControlPlane:
                 connection.owner_chat_id is not None and connection.owner_chat_id != message.chat.id
             ):
                 return False
+
+            intent = _control_intent(message.text, state=connection.control_state)
+            if intent is None:
+                return False
+            command, argument = intent
 
             response = await self._execute(
                 session, connection, command=command, argument=argument, now=moment
@@ -126,45 +155,110 @@ class ControlPlane:
         if command == "start":
             contact_id = _business_contact_id(argument)
             if contact_id is None:
-                return ControlResponse("Откройте Manage Bot из нужного управляемого чата.")
+                await cancel_live_confirmation(session, connection.id)
+                await set_control_state(session, connection.id, "main")
+                fresh = await self._fresh_connection(session, connection)
+                return ControlResponse(
+                    "Панель управления открыта. Для карточки контакта используйте Manage Bot.",
+                    _main_keyboard(fresh, now=now),
+                )
+            await cancel_live_confirmation(session, connection.id)
+            await set_control_state(session, connection.id, "main")
             card = await load_contact_card(session, connection.id, contact_id, now=now)
             return _render_contact_card(card, connection=connection)
+        if command == "state_help":
+            if connection.control_state == "mute_hours":
+                return ControlResponse("Выберите длительность паузы кнопкой.", _mute_keyboard())
+            return ControlResponse(
+                "Подтвердите live или отмените переход кнопкой.", _live_confirmation_keyboard()
+            )
+        if command == "menu":
+            await cancel_live_confirmation(session, connection.id)
+            await set_control_state(session, connection.id, "main")
+            fresh = await self._fresh_connection(session, connection)
+            return ControlResponse("Главное меню.", _main_keyboard(fresh, now=now))
         if command == "status":
-            return ControlResponse(_render_status(connection, now=now))
+            await cancel_live_confirmation(session, connection.id)
+            await set_control_state(session, connection.id, "main")
+            fresh = await self._fresh_connection(session, connection)
+            return ControlResponse(_render_status(fresh, now=now), _main_keyboard(fresh, now=now))
         if command == "off":
             await set_connection_control(session, connection.id, kill_switch=True, muted_until=None)
             await cancel_live_confirmation(session, connection.id)
+            await set_control_state(session, connection.id, "main")
+            fresh = await self._fresh_connection(session, connection)
             return ControlResponse(
-                "⛔ Секретарь выключен. Уже запланированные ответы тоже остановлены."
+                "⛔ Секретарь выключен. Уже запланированные ответы тоже остановлены.",
+                _main_keyboard(fresh, now=now),
             )
         if command == "on":
             await set_connection_control(
                 session, connection.id, kill_switch=False, muted_until=None
             )
-            return ControlResponse("✅ Секретарь включён. Временная пауза снята.")
+            await cancel_live_confirmation(session, connection.id)
+            await set_control_state(session, connection.id, "main")
+            fresh = await self._fresh_connection(session, connection)
+            return ControlResponse(
+                "✅ Секретарь включён. Временная пауза снята.",
+                _main_keyboard(fresh, now=now),
+            )
         if command == "mute":
+            if not argument:
+                await set_control_state(session, connection.id, "mute_hours")
+                return ControlResponse("На сколько часов поставить паузу?", _mute_keyboard())
             hours = _mute_hours(argument)
             if hours is None:
+                await set_control_state(session, connection.id, "mute_hours")
                 return ControlResponse(
-                    f"Использование: /mute N, где N — от 1 до {MAX_MUTE_HOURS} часов."
+                    f"Выберите кнопку или укажите от 1 до {MAX_MUTE_HOURS} часов.",
+                    _mute_keyboard(),
                 )
             until = now + timedelta(hours=hours)
             await set_connection_control(
                 session, connection.id, kill_switch=False, muted_until=until
             )
+            await set_control_state(session, connection.id, "main")
             local_until = until.astimezone(ZoneInfo(connection.policy.timezone))
-            return ControlResponse(f"⏸ Пауза до {local_until:%d.%m %H:%M} ({hours} ч).")
+            fresh = await self._fresh_connection(session, connection)
+            return ControlResponse(
+                f"⏸ Пауза до {local_until:%d.%m %H:%M} ({hours} ч).",
+                _main_keyboard(fresh, now=now),
+            )
         if command == "live":
             if not connection.dry_run:
-                return ControlResponse("Live-режим уже включён.")
+                await set_control_state(session, connection.id, "main")
+                return ControlResponse(
+                    "Live-режим уже включён.", _main_keyboard(connection, now=now)
+                )
             await request_live_confirmation(
                 session, connection.id, until=now + LIVE_CONFIRMATION_TTL
             )
+            await set_control_state(session, connection.id, "live_confirm")
             return ControlResponse(
                 "⚠️ Включить live? После подтверждения бот сможет отвечать контактам.",
-                _live_keyboard(),
+                _live_confirmation_keyboard(),
+            )
+        if command == "live_confirm":
+            enabled = await confirm_live_mode(session, connection.id, now=now)
+            await set_control_state(session, connection.id, "main")
+            fresh = await self._fresh_connection(session, connection)
+            text = (
+                "⚠️ Live-режим включён. Бот может отвечать контактам."
+                if enabled
+                else "Подтверждение истекло. Режим остался без изменений."
+            )
+            return ControlResponse(text, _main_keyboard(fresh, now=now))
+        if command == "live_cancel":
+            await cancel_live_confirmation(session, connection.id)
+            await set_control_state(session, connection.id, "main")
+            fresh = await self._fresh_connection(session, connection)
+            return ControlResponse(
+                "Dry-run сохранён. Live-режим не включён.",
+                _main_keyboard(fresh, now=now),
             )
 
+        await cancel_live_confirmation(session, connection.id)
+        await set_control_state(session, connection.id, "main")
         zone = ZoneInfo(connection.policy.timezone)
         local_now = now.astimezone(zone)
         day_start = datetime.combine(local_now.date(), time.min, tzinfo=zone)
@@ -175,7 +269,19 @@ class ControlPlane:
             since=day_start.astimezone(UTC),
             until=next_day.astimezone(UTC),
         )
-        return ControlResponse(_render_today(counts, local_date=local_now.strftime("%d.%m.%Y")))
+        fresh = await self._fresh_connection(session, connection)
+        return ControlResponse(
+            _render_today(counts, local_date=local_now.strftime("%d.%m.%Y")),
+            _main_keyboard(fresh, now=now),
+        )
+
+    async def _fresh_connection(
+        self, session: Any, connection: ConnectionRecord
+    ) -> ConnectionRecord:
+        fresh = await load_owner_connection(session, connection.owner_user_id)
+        if fresh is None:
+            raise LookupError("connection not found")
+        return fresh
 
     async def _contact_action(
         self,
@@ -234,10 +340,21 @@ class ControlPlane:
     ) -> ControlResponse:
         if action == "cancel":
             await cancel_live_confirmation(session, connection.id)
-            return ControlResponse("Dry-run сохранён. Live-режим не включён.")
-        if await confirm_live_mode(session, connection.id, now=now):
-            return ControlResponse("⚠️ Live-режим включён. Бот может отвечать контактам.")
-        return ControlResponse("Подтверждение истекло. Повторите /live.")
+            await set_control_state(session, connection.id, "main")
+            fresh = await self._fresh_connection(session, connection)
+            return ControlResponse(
+                "Dry-run сохранён. Live-режим не включён.",
+                _main_keyboard(fresh, now=now),
+            )
+        enabled = await confirm_live_mode(session, connection.id, now=now)
+        await set_control_state(session, connection.id, "main")
+        fresh = await self._fresh_connection(session, connection)
+        text = (
+            "⚠️ Live-режим включён. Бот может отвечать контактам."
+            if enabled
+            else "Подтверждение истекло. Повторите включение live."
+        )
+        return ControlResponse(text, _main_keyboard(fresh, now=now))
 
 
 def _parse_command(text: str | None) -> tuple[str, str] | None:
@@ -248,6 +365,38 @@ def _parse_command(text: str | None) -> tuple[str, str] | None:
         return None
     command = head[1:].split("@", 1)[0].lower()
     return command, argument.strip()
+
+
+def _control_intent(text: str, *, state: str) -> tuple[str, str] | None:
+    parsed = _parse_command(text)
+    allowed_commands = {"start", "status", "off", "on", "mute", "today", "live"}
+    if parsed is not None:
+        return parsed if parsed[0] in allowed_commands else None
+
+    choice = text.strip()
+    if state == "mute_hours":
+        if choice in MUTE_BUTTONS:
+            return "mute", str(MUTE_BUTTONS[choice])
+        if choice in {BUTTON_BACK, BUTTON_CANCEL}:
+            return "menu", ""
+        return "state_help", ""
+    if state == "live_confirm":
+        if choice == BUTTON_LIVE_CONFIRM:
+            return "live_confirm", ""
+        if choice in {BUTTON_CANCEL, BUTTON_BACK}:
+            return "live_cancel", ""
+        return "state_help", ""
+
+    main_actions = {
+        BUTTON_STATUS: ("status", ""),
+        BUTTON_TODAY: ("today", ""),
+        BUTTON_OFF: ("off", ""),
+        BUTTON_ON: ("on", ""),
+        BUTTON_MUTE: ("mute", ""),
+        BUTTON_LIVE: ("live", ""),
+        BUTTON_LIVE_ACTIVE: ("status", ""),
+    }
+    return main_actions.get(choice)
 
 
 def _mute_hours(argument: str) -> int | None:
@@ -415,10 +564,44 @@ def _template_keyboard(contact_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def _live_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="⚠️ Да, включить live", callback_data="live:confirm")],
-            [InlineKeyboardButton(text="Отмена", callback_data="live:cancel")],
-        ]
+def _main_keyboard(connection: ConnectionRecord, *, now: datetime) -> ReplyKeyboardMarkup:
+    muted_until = connection.policy.muted_until
+    stopped = connection.policy.kill_switch or (muted_until is not None and now < muted_until)
+    power_button = BUTTON_ON if stopped else BUTTON_OFF
+    live_button = BUTTON_LIVE if connection.dry_run else BUTTON_LIVE_ACTIVE
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BUTTON_STATUS), KeyboardButton(text=BUTTON_TODAY)],
+            [KeyboardButton(text=power_button), KeyboardButton(text=BUTTON_MUTE)],
+            [KeyboardButton(text=live_button)],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Управление секретарём",
+    )
+
+
+def _mute_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="1 час"), KeyboardButton(text="3 часа")],
+            [KeyboardButton(text="8 часов"), KeyboardButton(text="24 часа")],
+            [KeyboardButton(text=BUTTON_BACK)],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Выберите длительность паузы",
+    )
+
+
+def _live_confirmation_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BUTTON_LIVE_CONFIRM)],
+            [KeyboardButton(text=BUTTON_CANCEL)],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        one_time_keyboard=True,
+        input_field_placeholder="Подтвердите или отмените live",
     )

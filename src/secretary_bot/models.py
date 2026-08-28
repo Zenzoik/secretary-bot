@@ -65,6 +65,12 @@ class Base(DeclarativeBase):
 
 class Connection(Base):
     __tablename__ = "connections"
+    __table_args__ = (
+        CheckConstraint(
+            "control_state IN ('main', 'mute_hours', 'live_confirm')",
+            name="control_state_values",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(SURROGATE_KEY, primary_key=True, autoincrement=True)
     business_connection_id: Mapped[str] = mapped_column(Text, unique=True)
@@ -79,6 +85,7 @@ class Connection(Base):
     kill_switch: Mapped[bool] = mapped_column(Boolean, server_default=sql_text("false"))
     muted_until: Mapped[datetime | None] = mapped_column(UtcDateTime())
     live_confirmation_until: Mapped[datetime | None] = mapped_column(UtcDateTime())
+    control_state: Mapped[str] = mapped_column(Text, server_default=sql_text("'main'"))
     timezone: Mapped[str] = mapped_column(Text, server_default=sql_text("'Europe/Kyiv'"))
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

@@ -40,6 +40,7 @@ class ConnectionRecord:
     owner_user_id: int
     owner_chat_id: int | None
     dry_run: bool
+    control_state: str
     policy: ConnectionPolicy
 
 
@@ -126,6 +127,14 @@ async def set_connection_control(
         raise LookupError("connection not found")
     row.kill_switch = kill_switch
     row.muted_until = muted_until
+    await session.flush()
+
+
+async def set_control_state(session: AsyncSession, connection_id: int, state: str) -> None:
+    row = await session.get(models.Connection, connection_id)
+    if row is None:
+        raise LookupError("connection not found")
+    row.control_state = state
     await session.flush()
 
 
@@ -545,6 +554,7 @@ async def _record(session: AsyncSession, row: models.Connection) -> ConnectionRe
         owner_user_id=row.owner_user_id,
         owner_chat_id=row.owner_chat_id,
         dry_run=row.dry_run,
+        control_state=row.control_state,
         policy=ConnectionPolicy(
             timezone=row.timezone,
             windows=windows,

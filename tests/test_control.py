@@ -8,7 +8,18 @@ from aiogram.types import CallbackQuery, Message
 
 from secretary_bot import models
 from secretary_bot.actions import LogAction
-from secretary_bot.control import ControlPlane
+from secretary_bot.control import (
+    BUTTON_BACK,
+    BUTTON_CANCEL,
+    BUTTON_LIVE,
+    BUTTON_LIVE_CONFIRM,
+    BUTTON_MUTE,
+    BUTTON_OFF,
+    BUTTON_ON,
+    BUTTON_STATUS,
+    BUTTON_TODAY,
+    ControlPlane,
+)
 from secretary_bot.gate import ContactState, GateDecision, evaluate_gate
 from secretary_bot.storage import (
     ConnectionSnapshot,
@@ -70,6 +81,10 @@ def owner_callback(data: str, *, owner_id: int = 42) -> CallbackQuery:
     )
 
 
+def keyboard_texts(message: dict[str, Any]) -> list[str]:
+    return [button.text for row in message["reply_markup"].keyboard for button in row]
+
+
 async def store_owner(database: Database) -> int:
     async with database.session() as session, session.begin():
         connection = await upsert_connection(
@@ -104,6 +119,8 @@ async def test_off_status_and_on_change_the_persistent_gate(database: Database) 
         assert connection is not None
         assert connection.policy.kill_switch is True
     assert "выключен" in bot.sent[-1]["text"]
+    assert BUTTON_ON in keyboard_texts(bot.sent[-1])
+    assert BUTTON_OFF not in keyboard_texts(bot.sent[-1])
 
     assert await control.handle_message(owner_message("/on"), now=NOW)
     async with database.session() as session:
@@ -111,6 +128,24 @@ async def test_off_status_and_on_change_the_persistent_gate(database: Database) 
         assert connection is not None
         assert connection.policy.kill_switch is False
         assert connection.policy.muted_until is None
+    assert BUTTON_OFF in keyboard_texts(bot.sent[-1])
+    assert BUTTON_ON not in keyboard_texts(bot.sent[-1])
+
+
+@pytest.mark.asyncio
+async def test_start_opens_the_button_control_panel(database: Database) -> None:
+    await store_owner(database)
+    bot = FakeBot()
+
+    assert await ControlPlane(database, bot).handle_message(owner_message("/start"), now=NOW)
+
+    assert keyboard_texts(bot.sent[-1]) == [
+        BUTTON_STATUS,
+        BUTTON_TODAY,
+        BUTTON_OFF,
+        BUTTON_MUTE,
+        BUTTON_LIVE,
+    ]
 
 
 @pytest.mark.asyncio
@@ -143,7 +178,36 @@ async def test_invalid_mute_does_not_change_state(database: Database) -> None:
     async with database.session() as session:
         connection = await load_owner_connection(session, 42)
         assert connection is not None and connection.policy.muted_until is None
-    assert "Использование" in bot.sent[-1]["text"]
+    assert "Выберите кнопку" in bot.sent[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_mute_keyboard_state_persists_between_handlers(database: Database) -> None:
+    await store_owner(database)
+    bot = FakeBot()
+
+    assert await ControlPlane(database, bot).handle_message(owner_message(BUTTON_MUTE), now=NOW)
+    assert keyboard_texts(bot.sent[-1]) == ["1 час", "3 часа", "8 часов", "24 часа", BUTTON_BACK]
+    async with database.session() as session:
+        connection = await load_owner_connection(session, 42)
+        assert connection is not None and connection.control_state == "mute_hours"
+
+    assert await ControlPlane(database, bot).handle_message(owner_message("3 часа"), now=NOW)
+    async with database.session() as session:
+        connection = await load_owner_connection(session, 42)
+        assert connection is not None
+        assert connection.control_state == "main"
+        assert connection.policy.muted_until == NOW + timedelta(hours=3)
+    assert BUTTON_ON in keyboard_texts(bot.sent[-1])
+
+
+@pytest.mark.asyncio
+async def test_mute_duration_is_not_a_command_in_the_main_state(database: Database) -> None:
+    await store_owner(database)
+    bot = FakeBot()
+
+    assert not await ControlPlane(database, bot).handle_message(owner_message("3 часа"), now=NOW)
+    assert bot.sent == []
 
 
 @pytest.mark.asyncio
@@ -283,18 +347,19 @@ async def test_live_command_requires_a_separate_confirmation(database: Database)
     assert await control.handle_message(owner_message("/live"), now=NOW)
     async with database.session() as session:
         connection = await load_owner_connection(session, 42)
-        assert connection is not None and connection.dry_run is True
-    callbacks = [
-        button.callback_data
-        for row in bot.sent[-1]["reply_markup"].inline_keyboard
-        for button in row
-    ]
-    assert callbacks == ["live:confirm", "live:cancel"]
+        assert connection is not None
+        assert connection.dry_run is True
+        assert connection.control_state == "live_confirm"
+    assert keyboard_texts(bot.sent[-1]) == [BUTTON_LIVE_CONFIRM, BUTTON_CANCEL]
 
-    assert await control.handle_callback(owner_callback("live:confirm"), now=NOW)
+    assert await ControlPlane(database, bot).handle_message(
+        owner_message(BUTTON_LIVE_CONFIRM), now=NOW
+    )
     async with database.session() as session:
         connection = await load_owner_connection(session, 42)
-        assert connection is not None and connection.dry_run is False
+        assert connection is not None
+        assert connection.dry_run is False
+        assert connection.control_state == "main"
 
 
 @pytest.mark.asyncio
@@ -304,8 +369,8 @@ async def test_expired_live_confirmation_keeps_dry_run(database: Database) -> No
     control = ControlPlane(database, bot)
 
     assert await control.handle_message(owner_message("/live"), now=NOW)
-    assert await control.handle_callback(
-        owner_callback("live:confirm"), now=NOW + timedelta(minutes=5)
+    assert await control.handle_message(
+        owner_message(BUTTON_LIVE_CONFIRM), now=NOW + timedelta(minutes=5)
     )
 
     async with database.session() as session:
@@ -321,11 +386,13 @@ async def test_cancelled_live_confirmation_keeps_dry_run(database: Database) -> 
     control = ControlPlane(database, bot)
 
     assert await control.handle_message(owner_message("/live"), now=NOW)
-    assert await control.handle_callback(owner_callback("live:cancel"), now=NOW)
+    assert await control.handle_message(owner_message(BUTTON_CANCEL), now=NOW)
 
     async with database.session() as session:
         connection = await load_owner_connection(session, 42)
-        assert connection is not None and connection.dry_run is True
+        assert connection is not None
+        assert connection.dry_run is True
+        assert connection.control_state == "main"
 
 
 @pytest.mark.asyncio

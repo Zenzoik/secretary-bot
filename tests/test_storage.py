@@ -54,6 +54,7 @@ async def test_connection_is_created_then_refreshed(session: AsyncSession) -> No
     assert refreshed.id == created.id
     assert refreshed.policy.is_active is False
     assert refreshed.dry_run is True, "a fresh connection must start in dry run"
+    assert refreshed.control_state == "main"
     # A connection update without user_chat_id must not erase the known one.
     assert refreshed.owner_chat_id == 42
 
