@@ -77,6 +77,7 @@ class Connection(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, server_default=sql_text("true"))
     dry_run: Mapped[bool] = mapped_column(Boolean, server_default=sql_text("true"))
     kill_switch: Mapped[bool] = mapped_column(Boolean, server_default=sql_text("false"))
+    muted_until: Mapped[datetime | None] = mapped_column(UtcDateTime())
     timezone: Mapped[str] = mapped_column(Text, server_default=sql_text("'Europe/Kyiv'"))
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

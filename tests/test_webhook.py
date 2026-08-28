@@ -51,6 +51,16 @@ FEEDBACK_UPDATE = {
         "data": "feedback:1:ok",
     },
 }
+CONTROL_UPDATE = {
+    "update_id": 4,
+    "message": {
+        "message_id": 12,
+        "date": 1_700_000_002,
+        "chat": {"id": 42, "type": "private", "first_name": "Owner"},
+        "from": {"id": 42, "is_bot": False, "first_name": "Owner"},
+        "text": "/status",
+    },
+}
 
 
 @dataclass
@@ -229,6 +239,18 @@ def test_feedback_button_is_recorded(world) -> None:
     row = asyncio.run(_first(database, models.ShadowFeedback))
     assert row is not None and row.verdict == "ok"
     assert bot.answered == ["callback-1"]
+
+
+def test_owner_control_command_is_handled(world) -> None:
+    client, bot, _, _ = world
+
+    with client:
+        assert post_update(client, CONNECTION_UPDATE).status_code == 200
+        assert post_update(client, CONTROL_UPDATE).status_code == 200
+        wait_for(lambda: client.app.state.runtime.processed_updates == 2)
+
+    assert len(bot.sent) == 1
+    assert "Секретарь: включён" in bot.sent[0]["text"]
 
 
 def test_duplicate_business_message_is_processed_once(world) -> None:

@@ -14,6 +14,7 @@ from redis.asyncio import Redis
 
 from secretary_bot.classifier import ClassifierSettings, LanguageModel
 from secretary_bot.config import Settings
+from secretary_bot.control import ControlPlane
 from secretary_bot.delayed import DelayedReplyQueue
 from secretary_bot.ingest import (
     DeduplicationUnavailable,
@@ -71,6 +72,7 @@ def create_app(
     state = RuntimeState(
         bot=telegram_bot,
         pipeline=pipeline,
+        control=ControlPlane(database=connection_database, bot=telegram_bot),
         queue_size=settings.update_queue_size,
         allowed_chat_ids=settings.allowed_chat_ids,
     )

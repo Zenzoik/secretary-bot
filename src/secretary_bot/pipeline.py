@@ -155,7 +155,9 @@ class Pipeline:
                 _log(logging.WARNING, "unknown_connection", connection_id=task.connection_id)
                 return LogAction.ERROR
 
-            refusal = _blocked(connection) or await _owner_answered(session, connection, task)
+            refusal = _blocked(connection, now=moment) or await _owner_answered(
+                session, connection, task
+            )
             if refusal is not None:
                 await self._log_task(session, connection, task, refusal)
                 return refusal
@@ -317,11 +319,12 @@ async def _owner_answered(
     return LogAction.SKIPPED_OWNER_REPLIED if replied else None
 
 
-def _blocked(connection: ConnectionRecord) -> LogAction | None:
+def _blocked(connection: ConnectionRecord, *, now: datetime) -> LogAction | None:
     """The gate ran before the delay; re-check what may have changed since."""
     if not connection.policy.is_active:
         return LogAction.SKIPPED_INACTIVE
-    if connection.policy.kill_switch:
+    muted_until = connection.policy.muted_until
+    if connection.policy.kill_switch or (muted_until is not None and now < muted_until):
         return LogAction.SKIPPED_KILL_SWITCH
     return None
 

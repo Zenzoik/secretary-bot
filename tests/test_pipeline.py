@@ -178,6 +178,19 @@ async def test_kill_switch_stops_delivery_even_after_the_gate(world) -> None:
 
 
 @pytest.mark.asyncio
+async def test_temporary_mute_stops_a_task_scheduled_before_the_command(world) -> None:
+    pipeline, bot, _, database = world
+    await pipeline.process_incoming(message())
+    task = (await scheduled(pipeline))[0]
+
+    await set_connection(database, muted_until=NIGHT + timedelta(hours=3))
+    action = await pipeline.deliver(task, now=NIGHT + timedelta(minutes=3))
+
+    assert action is LogAction.SKIPPED_KILL_SWITCH
+    assert bot.sent == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "result",
     [HardFilterResult.BOT_SENDER, HardFilterResult.SERVICE_SENDER, HardFilterResult.NON_PRIVATE],

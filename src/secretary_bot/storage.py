@@ -6,7 +6,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -93,6 +93,48 @@ async def load_connection(
 ) -> ConnectionRecord | None:
     row = await _connection_row(session, business_connection_id)
     return None if row is None else await _record(session, row)
+
+
+async def load_owner_connection(
+    session: AsyncSession, owner_user_id: int
+) -> ConnectionRecord | None:
+    row = await _owner_row(session, owner_user_id)
+    return None if row is None else await _record(session, row)
+
+
+async def set_connection_control(
+    session: AsyncSession,
+    connection_id: int,
+    *,
+    kill_switch: bool,
+    muted_until: datetime | None,
+) -> None:
+    row = await session.get(models.Connection, connection_id)
+    if row is None:
+        raise LookupError("connection not found")
+    row.kill_switch = kill_switch
+    row.muted_until = muted_until
+    await session.flush()
+
+
+async def daily_action_counts(
+    session: AsyncSession,
+    connection_id: int,
+    *,
+    since: datetime,
+    until: datetime,
+) -> list[tuple[str, str | None, int]]:
+    rows = await session.execute(
+        select(models.MessageLog.action, models.MessageLog.category, func.count())
+        .where(
+            models.MessageLog.connection_id == connection_id,
+            models.MessageLog.occurred_at >= since,
+            models.MessageLog.occurred_at < until,
+        )
+        .group_by(models.MessageLog.action, models.MessageLog.category)
+        .order_by(models.MessageLog.action, models.MessageLog.category)
+    )
+    return [(action, category, count) for action, category, count in rows]
 
 
 async def load_contact_state(
@@ -318,6 +360,7 @@ async def _record(session: AsyncSession, row: models.Connection) -> ConnectionRe
             windows=windows,
             is_active=row.is_active,
             kill_switch=row.kill_switch,
+            muted_until=row.muted_until,
         ),
     )
 

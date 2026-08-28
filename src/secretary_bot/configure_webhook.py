@@ -7,6 +7,8 @@ from aiogram import Bot
 from secretary_bot.config import Settings
 
 _ALLOWED_UPDATES = [
+    # Owner control commands arrive as ordinary private messages with the bot.
+    "message",
     "business_connection",
     "business_message",
     "edited_business_message",

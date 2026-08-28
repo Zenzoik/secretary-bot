@@ -9,6 +9,7 @@ from typing import Any, Protocol
 
 from aiogram.types import BusinessConnection, Message, Update
 
+from secretary_bot.control import ControlPlane
 from secretary_bot.hard_filter import apply_hard_filter
 from secretary_bot.notifications import parse_feedback
 from secretary_bot.pipeline import IncomingMessage, Pipeline
@@ -29,6 +30,7 @@ class TelegramBot(Protocol):
 class RuntimeState:
     bot: TelegramBot
     pipeline: Pipeline
+    control: ControlPlane
     queue_size: int
     # Optional safety net for early operation: when set, only these chats are
     # processed. Empty means the FR-2 policy — every chat except exclusions.
@@ -67,6 +69,11 @@ async def handle_update(update: Update, state: RuntimeState) -> None:
 
     if update.callback_query is not None:
         await _handle_feedback(update, state)
+        return
+
+    if update.message is not None:
+        if not await state.control.handle_message(update.message):
+            _log(logging.INFO, "message_ignored", update_id=update.update_id)
         return
 
     if update.business_message is not None:

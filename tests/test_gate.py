@@ -55,6 +55,17 @@ def test_kill_switch_stops_before_exclusions_and_schedule() -> None:
     assert result.decision is GateDecision.SKIPPED_KILL_SWITCH
 
 
+def test_temporary_mute_stops_then_expires_without_a_worker() -> None:
+    muted = policy(muted_until=INSIDE_NIGHT + timedelta(hours=3))
+
+    assert evaluate_gate(muted, ContactState(), now=INSIDE_NIGHT).decision is (
+        GateDecision.SKIPPED_KILL_SWITCH
+    )
+    assert evaluate_gate(muted, ContactState(), now=INSIDE_NIGHT + timedelta(hours=3)).decision is (
+        GateDecision.ALLOWED
+    )
+
+
 def test_permanent_exclusion_stops_processing() -> None:
     result = evaluate_gate(policy(), ContactState(exclusion=Exclusion()), now=INSIDE_NIGHT)
 

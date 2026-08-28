@@ -65,6 +65,7 @@ class ConnectionPolicy:
     windows: tuple[QuietWindow, ...] = ()
     is_active: bool = True
     kill_switch: bool = False
+    muted_until: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +93,7 @@ def evaluate_gate(policy: ConnectionPolicy, contact: ContactState, *, now: datet
     """
     if not policy.is_active:
         return GateResult(GateDecision.SKIPPED_INACTIVE)
-    if policy.kill_switch:
+    if policy.kill_switch or (policy.muted_until is not None and now < policy.muted_until):
         return GateResult(GateDecision.SKIPPED_KILL_SWITCH)
     if contact.exclusion is not None and contact.exclusion.covers(now):
         return GateResult(GateDecision.SKIPPED_EXCLUDED)
