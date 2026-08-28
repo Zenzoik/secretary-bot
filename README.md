@@ -3,6 +3,9 @@
 Пользовательские команды, сценарии и настройки описаны в
 [`README-USER.md`](README-USER.md).
 
+Закрытый onboarding заказчиков и мастер-панель описаны в
+[`docs/stage-1.6-onboarding.md`](docs/stage-1.6-onboarding.md).
+
 Персональный автоответчик для Telegram Business. В нерабочее время бот отвечает
 одним коротким сообщением от имени владельца, а денежные вопросы кладёт в
 утренний список. Тела сообщений не сохраняются нигде.
@@ -39,6 +42,8 @@ dry-run и Manage Bot одноразовые: после действия они
 ```bash
 cp .env.example .env
 # Заполнить BOT_TOKEN, WEBHOOK_SECRET и PUBLIC_BASE_URL в .env
+# MASTER_TELEGRAM_USER_ID — числовой Telegram ID единственного мастера
+# BOT_USERNAME — username бота без @
 set -a
 source .env
 set +a
@@ -117,7 +122,8 @@ ALLOWED_CHAT_IDS=123456789
 
 ```bash
 cp .env.example .env
-# Обязательны: BOT_TOKEN, WEBHOOK_SECRET, POSTGRES_PASSWORD, PUBLIC_BASE_URL
+# Обязательны: BOT_TOKEN, WEBHOOK_SECRET, MASTER_TELEGRAM_USER_ID,
+# BOT_USERNAME, POSTGRES_PASSWORD, PUBLIC_BASE_URL
 docker compose up -d --build
 docker compose logs -f app
 ```
