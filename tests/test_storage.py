@@ -13,8 +13,13 @@ from secretary_bot.classifier import ClassifierSettings
 from secretary_bot.gate import GateDecision, evaluate_gate
 from secretary_bot.storage import (
     ConnectionSnapshot,
+    approve_access_user,
     claim_window,
+    consume_access_invite,
+    create_access_invite,
     enqueue_morning,
+    ensure_master,
+    load_access_user,
     load_classifier_settings,
     load_connection,
     load_contact_state,
@@ -25,6 +30,7 @@ from secretary_bot.storage import (
     record_feedback,
     record_incoming,
     record_owner_reply,
+    revoke_access_user,
     upsert_connection,
 )
 
@@ -42,6 +48,73 @@ SNAPSHOT = ConnectionSnapshot(
 async def stored_connection(session: AsyncSession) -> int:
     record = await upsert_connection(session, SNAPSHOT)
     return record.id
+
+
+@pytest.mark.asyncio
+async def test_master_bootstrap_is_unique_and_environment_owned(session: AsyncSession) -> None:
+    master = await ensure_master(session, 42, username="owner")
+
+    assert master.is_master
+    assert master.can_process
+    with pytest.raises(RuntimeError, match="different master"):
+        await ensure_master(session, 99)
+
+
+@pytest.mark.asyncio
+async def test_invite_is_one_time_pending_until_master_approval(session: AsyncSession) -> None:
+    await ensure_master(session, 42)
+    token = await create_access_invite(session, created_by=42, now=NOW, ttl=timedelta(hours=24))
+
+    pending = await consume_access_invite(
+        session, token=token, user_id=99, username="customer", now=NOW
+    )
+
+    assert pending is not None
+    assert pending.status == "pending"
+    assert pending.onboarding_state == "awaiting_connection"
+    assert not pending.can_connect
+    assert (
+        await consume_access_invite(session, token=token, user_id=100, username="other", now=NOW)
+        is None
+    )
+
+    assert await approve_access_user(session, user_id=99, approved_by=42, now=NOW)
+    approved = await load_access_user(session, 99)
+    assert approved is not None and approved.can_connect and not approved.can_process
+
+
+@pytest.mark.asyncio
+async def test_expired_invite_and_non_master_mutations_are_rejected(
+    session: AsyncSession,
+) -> None:
+    await ensure_master(session, 42)
+    token = await create_access_invite(session, created_by=42, now=NOW, ttl=timedelta(minutes=1))
+
+    assert (
+        await consume_access_invite(
+            session,
+            token=token,
+            user_id=99,
+            username=None,
+            now=NOW + timedelta(minutes=1),
+        )
+        is None
+    )
+    with pytest.raises(PermissionError):
+        await create_access_invite(session, created_by=99, now=NOW, ttl=timedelta(hours=1))
+
+
+@pytest.mark.asyncio
+async def test_master_can_revoke_but_not_demote_itself(session: AsyncSession) -> None:
+    await ensure_master(session, 42)
+    token = await create_access_invite(session, created_by=42, now=NOW, ttl=timedelta(hours=1))
+    await consume_access_invite(session, token=token, user_id=99, username=None, now=NOW)
+    await approve_access_user(session, user_id=99, approved_by=42, now=NOW)
+
+    assert await revoke_access_user(session, user_id=99, revoked_by=42, now=NOW)
+    revoked = await load_access_user(session, 99)
+    assert revoked is not None and revoked.status == "revoked"
+    assert not await revoke_access_user(session, user_id=42, revoked_by=42, now=NOW)
 
 
 @pytest.mark.asyncio

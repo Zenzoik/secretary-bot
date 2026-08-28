@@ -3,6 +3,12 @@ import pytest
 from secretary_bot.config import ConfigurationError, Settings
 
 
+@pytest.fixture(autouse=True)
+def access_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MASTER_TELEGRAM_USER_ID", "42")
+    monkeypatch.setenv("BOT_USERNAME", "secretary_test_bot")
+
+
 def test_defaults_keep_the_bot_offline_and_silent(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BOT_TOKEN", "123456:TEST_TOKEN")
     monkeypatch.setenv("WEBHOOK_SECRET", "valid_secret")
@@ -79,4 +85,22 @@ def test_classifier_timeout_must_be_positive(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("CLASSIFIER_TIMEOUT_SECONDS", "0")
 
     with pytest.raises(ConfigurationError, match="CLASSIFIER_TIMEOUT_SECONDS"):
+        Settings.from_env()
+
+
+def test_master_user_id_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "123456:TEST_TOKEN")
+    monkeypatch.setenv("WEBHOOK_SECRET", "valid_secret")
+    monkeypatch.delenv("MASTER_TELEGRAM_USER_ID")
+
+    with pytest.raises(ConfigurationError, match="MASTER_TELEGRAM_USER_ID"):
+        Settings.from_env()
+
+
+def test_bot_username_is_validated(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "123456:TEST_TOKEN")
+    monkeypatch.setenv("WEBHOOK_SECRET", "valid_secret")
+    monkeypatch.setenv("BOT_USERNAME", "bad username")
+
+    with pytest.raises(ConfigurationError, match="BOT_USERNAME"):
         Settings.from_env()

@@ -93,6 +93,46 @@ class Connection(Base):
     )
 
 
+class AccessUser(Base):
+    __tablename__ = "access_users"
+    __table_args__ = (
+        CheckConstraint("role IN ('master', 'user')", name="role_values"),
+        CheckConstraint("status IN ('pending', 'active', 'revoked')", name="status_values"),
+        CheckConstraint(
+            "onboarding_state IN ('awaiting_connection', 'timezone', 'schedule', 'scope', 'ready')",
+            name="onboarding_state_values",
+        ),
+        Index("ix_access_users_status_role", "status", "role"),
+    )
+
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    username: Mapped[str | None] = mapped_column(Text)
+    role: Mapped[str] = mapped_column(Text, server_default=sql_text("'user'"))
+    status: Mapped[str] = mapped_column(Text, server_default=sql_text("'pending'"))
+    onboarding_state: Mapped[str] = mapped_column(
+        Text, server_default=sql_text("'awaiting_connection'")
+    )
+    invited_by: Mapped[int | None] = mapped_column(BigInteger)
+    approved_by: Mapped[int | None] = mapped_column(BigInteger)
+    revoked_by: Mapped[int | None] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
+    status_changed_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
+
+
+class AccessInvite(Base):
+    __tablename__ = "access_invites"
+
+    id: Mapped[int] = mapped_column(SURROGATE_KEY, primary_key=True, autoincrement=True)
+    token_hash: Mapped[bytes] = mapped_column(LargeBinary(32), unique=True)
+    created_by: Mapped[int] = mapped_column(
+        ForeignKey("access_users.user_id", ondelete="RESTRICT"), index=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime(), index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
+    consumed_by: Mapped[int | None] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
+
+
 class Schedule(Base):
     __tablename__ = "schedules"
     __table_args__ = (CheckConstraint("weekday_mask BETWEEN 1 AND 127", name="weekday_mask_range"),)

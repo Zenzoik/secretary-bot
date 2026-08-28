@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -55,6 +57,28 @@ class ContactCardRecord:
     forced_template_code: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class AccessUserRecord:
+    user_id: int
+    username: str | None
+    role: str
+    status: str
+    onboarding_state: str
+    invited_by: int | None
+
+    @property
+    def is_master(self) -> bool:
+        return self.role == "master" and self.status == "active"
+
+    @property
+    def can_connect(self) -> bool:
+        return self.status == "active"
+
+    @property
+    def can_process(self) -> bool:
+        return self.status == "active" and self.onboarding_state == "ready"
+
+
 @dataclass(slots=True)
 class Database:
     engine: AsyncEngine
@@ -72,6 +96,147 @@ class Database:
 
     async def aclose(self) -> None:
         await self.engine.dispose()
+
+
+async def ensure_master(
+    session: AsyncSession, user_id: int, *, username: str | None = None
+) -> AccessUserRecord:
+    """Create the environment-owned master, refusing a second master."""
+    other_master = await session.scalar(
+        select(models.AccessUser).where(
+            models.AccessUser.role == "master", models.AccessUser.user_id != user_id
+        )
+    )
+    if other_master is not None:
+        raise RuntimeError("a different master is already configured")
+    row = await session.get(models.AccessUser, user_id)
+    if row is None:
+        row = models.AccessUser(user_id=user_id)
+        session.add(row)
+    row.username = username or row.username
+    row.role = "master"
+    row.status = "active"
+    row.onboarding_state = "ready"
+    row.revoked_by = None
+    row.status_changed_at = datetime.now(UTC)
+    await session.flush()
+    return _access_record(row)
+
+
+async def load_access_user(session: AsyncSession, user_id: int) -> AccessUserRecord | None:
+    row = await session.get(models.AccessUser, user_id)
+    return None if row is None else _access_record(row)
+
+
+async def list_access_users(session: AsyncSession) -> list[AccessUserRecord]:
+    rows = await session.scalars(
+        select(models.AccessUser).order_by(models.AccessUser.created_at, models.AccessUser.user_id)
+    )
+    return [_access_record(row) for row in rows]
+
+
+async def create_access_invite(
+    session: AsyncSession,
+    *,
+    created_by: int,
+    now: datetime,
+    ttl: timedelta,
+) -> str:
+    creator = await load_access_user(session, created_by)
+    if creator is None or not creator.is_master:
+        raise PermissionError("only the active master may create invites")
+    token = secrets.token_urlsafe(24)
+    session.add(
+        models.AccessInvite(
+            token_hash=_invite_hash(token),
+            created_by=created_by,
+            expires_at=now + ttl,
+        )
+    )
+    await session.flush()
+    return token
+
+
+async def consume_access_invite(
+    session: AsyncSession,
+    *,
+    token: str,
+    user_id: int,
+    username: str | None,
+    now: datetime,
+) -> AccessUserRecord | None:
+    consumed = await session.execute(
+        update(models.AccessInvite)
+        .where(
+            models.AccessInvite.token_hash == _invite_hash(token),
+            models.AccessInvite.consumed_at.is_(None),
+            models.AccessInvite.expires_at > now,
+        )
+        .values(consumed_at=now, consumed_by=user_id)
+        .returning(models.AccessInvite.created_by)
+    )
+    created_by = consumed.scalar_one_or_none()
+    if created_by is None:
+        return None
+    row = await session.get(models.AccessUser, user_id)
+    if row is None:
+        row = models.AccessUser(user_id=user_id)
+        session.add(row)
+    if row.role == "master":
+        return _access_record(row)
+    row.username = username
+    row.role = "user"
+    row.status = "pending"
+    row.onboarding_state = "awaiting_connection"
+    row.invited_by = created_by
+    row.approved_by = None
+    row.revoked_by = None
+    row.status_changed_at = now
+    await session.flush()
+    return _access_record(row)
+
+
+async def approve_access_user(
+    session: AsyncSession, *, user_id: int, approved_by: int, now: datetime
+) -> bool:
+    approver = await load_access_user(session, approved_by)
+    if approver is None or not approver.is_master:
+        raise PermissionError("only the active master may approve users")
+    changed = await session.execute(
+        update(models.AccessUser)
+        .where(
+            models.AccessUser.user_id == user_id,
+            models.AccessUser.role == "user",
+            models.AccessUser.status == "pending",
+        )
+        .values(
+            status="active",
+            onboarding_state="awaiting_connection",
+            approved_by=approved_by,
+            revoked_by=None,
+            status_changed_at=now,
+        )
+    )
+    return bool(changed.rowcount)
+
+
+async def revoke_access_user(
+    session: AsyncSession, *, user_id: int, revoked_by: int, now: datetime
+) -> bool:
+    revoker = await load_access_user(session, revoked_by)
+    if revoker is None or not revoker.is_master:
+        raise PermissionError("only the active master may revoke users")
+    changed = await session.execute(
+        update(models.AccessUser)
+        .where(models.AccessUser.user_id == user_id, models.AccessUser.role == "user")
+        .values(
+            status="revoked",
+            onboarding_state="awaiting_connection",
+            revoked_by=revoked_by,
+            status_changed_at=now,
+        )
+    )
+    return bool(changed.rowcount)
 
 
 async def upsert_connection(
@@ -575,3 +740,18 @@ async def _touch_activity(
     for field, value in values.items():
         setattr(activity, field, value)
     await session.flush()
+
+
+def _access_record(row: models.AccessUser) -> AccessUserRecord:
+    return AccessUserRecord(
+        user_id=row.user_id,
+        username=row.username,
+        role=row.role,
+        status=row.status,
+        onboarding_state=row.onboarding_state,
+        invited_by=row.invited_by,
+    )
+
+
+def _invite_hash(token: str) -> bytes:
+    return hashlib.sha256(token.encode()).digest()

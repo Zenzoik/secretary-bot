@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from secretary_bot.classifier import DEFAULT_TIMEOUT_SECONDS
 
 _SECRET_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
+_BOT_USERNAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
 
 
 class ConfigurationError(ValueError):
@@ -17,6 +18,8 @@ class ConfigurationError(ValueError):
 class Settings:
     bot_token: str
     webhook_secret: str
+    master_user_id: int = 0
+    bot_username: str = ""
     public_base_url: str | None = None
     allowed_chat_ids: frozenset[int] = frozenset()
     log_level: str = "INFO"
@@ -41,6 +44,10 @@ class Settings:
             raise ConfigurationError(
                 "WEBHOOK_SECRET must contain 1-256 characters: A-Z, a-z, 0-9, _ or -"
             )
+        master_user_id = _parse_positive_int("MASTER_TELEGRAM_USER_ID", required=True)
+        bot_username = _required("BOT_USERNAME").removeprefix("@")
+        if not _BOT_USERNAME_PATTERN.fullmatch(bot_username):
+            raise ConfigurationError("BOT_USERNAME must be a valid Telegram username")
 
         public_base_url = os.getenv("PUBLIC_BASE_URL") or None
         if require_public_url and public_base_url is None:
@@ -68,6 +75,8 @@ class Settings:
         return cls(
             bot_token=bot_token,
             webhook_secret=webhook_secret,
+            master_user_id=master_user_id,
+            bot_username=bot_username,
             public_base_url=public_base_url,
             allowed_chat_ids=allowed_chat_ids,
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -100,8 +109,13 @@ def _parse_positive_float(name: str, *, default: float) -> float:
     return value
 
 
-def _parse_positive_int(name: str, *, default: int) -> int:
-    raw = os.getenv(name, str(default))
+def _parse_positive_int(name: str, *, default: int | None = None, required: bool = False) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        if required:
+            raise ConfigurationError(f"{name} is required")
+        assert default is not None
+        raw = str(default)
     try:
         value = int(raw)
     except ValueError as exc:

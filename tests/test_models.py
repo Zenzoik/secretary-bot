@@ -5,6 +5,8 @@ from sqlalchemy.schema import CreateIndex, CreateTable
 from secretary_bot.models import Base
 
 EXPECTED_TABLES = {
+    "access_invites",
+    "access_users",
     "connections",
     "contact_activity",
     "exclusions",
@@ -31,7 +33,12 @@ def test_schema_can_be_created_in_dependency_order() -> None:
 
 
 def test_tenant_tables_cascade_from_connection() -> None:
-    direct_tenant_tables = EXPECTED_TABLES - {"connections", "shadow_feedback"}
+    direct_tenant_tables = EXPECTED_TABLES - {
+        "access_invites",
+        "access_users",
+        "connections",
+        "shadow_feedback",
+    }
 
     for table_name in direct_tenant_tables:
         table = Base.metadata.tables[table_name]
@@ -56,6 +63,11 @@ def test_message_log_has_no_plaintext_body_column() -> None:
 
 def test_critical_domain_checks_are_present() -> None:
     expected = {
+        "access_users": {
+            "ck_access_users_onboarding_state_values",
+            "ck_access_users_role_values",
+            "ck_access_users_status_values",
+        },
         "connections": {"ck_connections_control_state_values"},
         "schedules": {"ck_schedules_weekday_mask_range"},
         "overrides": {"ck_overrides_mode_values"},
