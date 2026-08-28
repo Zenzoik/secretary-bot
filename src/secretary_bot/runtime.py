@@ -209,6 +209,7 @@ async def _store_connection(
             await set_connection_control(session, record.id, kill_switch=True, muted_until=None)
     state.connections[connection.id] = connection
     _log_connection(connection, update_id=update_id, source=source)
+    await state.control.handle_business_connection(connection.user.id, connection.user_chat_id)
     return True
 
 

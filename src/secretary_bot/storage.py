@@ -4,11 +4,11 @@ import hashlib
 import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -41,6 +41,7 @@ class ConnectionRecord:
     business_connection_id: str
     owner_user_id: int
     owner_chat_id: int | None
+    rights: dict[str, Any]
     dry_run: bool
     control_state: str
     policy: ConnectionPolicy
@@ -126,6 +127,78 @@ async def ensure_master(
 async def load_access_user(session: AsyncSession, user_id: int) -> AccessUserRecord | None:
     row = await session.get(models.AccessUser, user_id)
     return None if row is None else _access_record(row)
+
+
+async def set_onboarding_state(
+    session: AsyncSession, user_id: int, state: str, *, now: datetime
+) -> None:
+    row = await session.get(models.AccessUser, user_id)
+    if row is None or row.status != "active":
+        raise PermissionError("onboarding requires an active user")
+    row.onboarding_state = state
+    row.status_changed_at = now
+    await session.flush()
+
+
+async def set_owner_timezone(
+    session: AsyncSession,
+    *,
+    connection_id: int,
+    user_id: int,
+    timezone: str,
+    now: datetime,
+) -> None:
+    connection = await session.get(models.Connection, connection_id)
+    if connection is None or connection.owner_user_id != user_id:
+        raise PermissionError("connection does not belong to this user")
+    connection.timezone = timezone
+    await set_onboarding_state(session, user_id, "schedule", now=now)
+
+
+async def set_owner_schedule(
+    session: AsyncSession,
+    *,
+    connection_id: int,
+    user_id: int,
+    weekday_mask: int,
+    time_from: time,
+    time_to: time,
+    now: datetime,
+) -> None:
+    connection = await session.get(models.Connection, connection_id)
+    if connection is None or connection.owner_user_id != user_id:
+        raise PermissionError("connection does not belong to this user")
+    await session.execute(
+        delete(models.Schedule).where(models.Schedule.connection_id == connection_id)
+    )
+    session.add(
+        models.Schedule(
+            connection_id=connection_id,
+            weekday_mask=weekday_mask,
+            time_from=time_from,
+            time_to=time_to,
+        )
+    )
+    await set_onboarding_state(session, user_id, "scope", now=now)
+
+
+async def complete_onboarding(
+    session: AsyncSession, *, connection_id: int, user_id: int, now: datetime
+) -> None:
+    connection = await session.get(models.Connection, connection_id)
+    if connection is None or connection.owner_user_id != user_id:
+        raise PermissionError("connection does not belong to this user")
+    schedule_exists = await session.scalar(
+        select(models.Schedule.id).where(models.Schedule.connection_id == connection_id).limit(1)
+    )
+    if schedule_exists is None:
+        raise ValueError("onboarding requires a schedule")
+    connection.dry_run = True
+    connection.kill_switch = False
+    connection.muted_until = None
+    connection.live_confirmation_until = None
+    connection.control_state = "main"
+    await set_onboarding_state(session, user_id, "ready", now=now)
 
 
 async def list_access_users(session: AsyncSession) -> list[AccessUserRecord]:
@@ -749,6 +822,7 @@ async def _record(session: AsyncSession, row: models.Connection) -> ConnectionRe
         business_connection_id=row.business_connection_id,
         owner_user_id=row.owner_user_id,
         owner_chat_id=row.owner_chat_id,
+        rights=dict(row.rights_json or {}),
         dry_run=row.dry_run,
         control_state=row.control_state,
         policy=ConnectionPolicy(

@@ -17,9 +17,12 @@ from secretary_bot.control import (
     BUTTON_MUTE,
     BUTTON_OFF,
     BUTTON_ON,
+    BUTTON_SCOPE_CONFIRMED,
     BUTTON_STATUS,
     BUTTON_TODAY,
     BUTTON_USERS,
+    SCHEDULE_BUTTONS,
+    TIMEZONE_BUTTONS,
     ControlPlane,
 )
 from secretary_bot.gate import ContactState, GateDecision, evaluate_gate
@@ -34,6 +37,7 @@ from secretary_bot.storage import (
     load_contact_state,
     load_owner_connection,
     log_decision,
+    set_connection_control,
     upsert_connection,
 )
 
@@ -226,6 +230,104 @@ async def test_non_master_cannot_use_access_callbacks(database: Database) -> Non
         owner_callback("access:revoke:42", owner_id=99), now=NOW
     )
     assert bot.sent == []
+
+
+async def store_onboarding_customer(
+    database: Database, *, rights: dict[str, bool] | None = None
+) -> int:
+    async with database.session() as session, session.begin():
+        await ensure_master(session, 42)
+        token = await create_access_invite(session, created_by=42, now=NOW, ttl=timedelta(hours=1))
+        await consume_access_invite(session, token=token, user_id=99, username="customer", now=NOW)
+        await approve_access_user(session, user_id=99, approved_by=42, now=NOW)
+        connection = await upsert_connection(
+            session,
+            ConnectionSnapshot(
+                "customer-connection",
+                owner_user_id=99,
+                owner_chat_id=99,
+                rights=rights or {"can_reply": True, "can_read_messages": True},
+            ),
+        )
+        await set_connection_control(session, connection.id, kill_switch=True, muted_until=None)
+        return connection.id
+
+
+@pytest.mark.asyncio
+async def test_onboarding_fsm_persists_and_finishes_in_safe_dry_run(
+    database: Database,
+) -> None:
+    await store_onboarding_customer(database)
+    bot = FakeBot()
+
+    assert await ControlPlane(database, bot).handle_business_connection(99, 99, now=NOW)
+    assert set(keyboard_texts(bot.sent[-1])) == set(TIMEZONE_BUTTONS)
+
+    assert await ControlPlane(database, bot).handle_message(
+        owner_message("🇨🇿 Прага", owner_id=99, chat_id=99), now=NOW
+    )
+    assert set(keyboard_texts(bot.sent[-1])) == {*SCHEDULE_BUTTONS, BUTTON_BACK}
+
+    assert await ControlPlane(database, bot).handle_message(
+        owner_message("🧪 Тестовый 24/7", owner_id=99, chat_id=99), now=NOW
+    )
+    assert keyboard_texts(bot.sent[-1]) == [BUTTON_SCOPE_CONFIRMED, BUTTON_BACK]
+
+    assert await ControlPlane(database, bot).handle_message(
+        owner_message(BUTTON_SCOPE_CONFIRMED, owner_id=99, chat_id=99), now=NOW
+    )
+    async with database.session() as session:
+        access = await load_access_user(session, 99)
+        connection = await load_owner_connection(session, 99)
+        assert access is not None and access.can_process
+        assert connection is not None
+        assert connection.policy.timezone == "Europe/Prague"
+        assert len(connection.policy.windows) == 1
+        assert connection.dry_run is True
+        assert connection.policy.kill_switch is False
+    assert BUTTON_USERS not in keyboard_texts(bot.sent[-1])
+    assert BUTTON_LIVE in keyboard_texts(bot.sent[-1])
+
+
+@pytest.mark.asyncio
+async def test_onboarding_refuses_missing_business_rights(database: Database) -> None:
+    await store_onboarding_customer(database, rights={"can_reply": True})
+    bot = FakeBot()
+
+    assert await ControlPlane(database, bot).handle_business_connection(99, 99, now=NOW)
+
+    async with database.session() as session:
+        access = await load_access_user(session, 99)
+        assert access is not None and access.onboarding_state == "awaiting_connection"
+    assert "чтение сообщений" in bot.sent[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_onboarding_blocks_live_and_supports_back_navigation(
+    database: Database,
+) -> None:
+    connection_id = await store_onboarding_customer(database)
+    bot = FakeBot()
+    control = ControlPlane(database, bot)
+    assert await control.handle_business_connection(99, 99, now=NOW)
+
+    assert await control.handle_message(
+        owner_message(BUTTON_LIVE, owner_id=99, chat_id=99), now=NOW
+    )
+    async with database.session() as session:
+        access = await load_access_user(session, 99)
+        connection = await session.get(models.Connection, connection_id)
+        assert access is not None and access.onboarding_state == "timezone"
+        assert connection is not None and connection.live_confirmation_until is None
+
+    assert await control.handle_message(owner_message("🇨🇿 Прага", owner_id=99, chat_id=99), now=NOW)
+    assert await control.handle_message(
+        owner_message(BUTTON_BACK, owner_id=99, chat_id=99), now=NOW
+    )
+    async with database.session() as session:
+        access = await load_access_user(session, 99)
+        assert access is not None and access.onboarding_state == "timezone"
+    assert set(keyboard_texts(bot.sent[-1])) == set(TIMEZONE_BUTTONS)
 
 
 @pytest.mark.asyncio

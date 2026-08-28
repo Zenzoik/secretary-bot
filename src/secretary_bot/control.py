@@ -22,6 +22,7 @@ from secretary_bot.storage import (
     Database,
     approve_access_user,
     cancel_live_confirmation,
+    complete_onboarding,
     confirm_live_mode,
     consume_access_invite,
     create_access_invite,
@@ -36,6 +37,9 @@ from secretary_bot.storage import (
     set_contact_exclusion,
     set_contact_template_override,
     set_control_state,
+    set_onboarding_state,
+    set_owner_schedule,
+    set_owner_timezone,
 )
 from secretary_bot.templates import DEFAULT_TEMPLATES, TemplateCode
 
@@ -57,6 +61,19 @@ BUTTON_USERS = "👥 Пользователи"
 BUTTON_INVITE = "➕ Пригласить"
 BUTTON_USERS_REFRESH = "🔄 Обновить список"
 BUTTON_ADMIN_BACK = "↩️ Главное меню"
+BUTTON_SCOPE_CONFIRMED = "✅ Only Selected Chats настроено"
+BUTTON_RECHECK_CONNECTION = "🔄 Проверить подключение"
+TIMEZONE_BUTTONS = {
+    "🇺🇦 Киев": "Europe/Kyiv",
+    "🇨🇿 Прага": "Europe/Prague",
+    "🇵🇱 Варшава": "Europe/Warsaw",
+    "🌐 UTC": "UTC",
+}
+SCHEDULE_BUTTONS = {
+    "🌙 Каждый день 22–08": (127, time(22, 0), time(8, 0)),
+    "💼 Будни 18–09": (31, time(18, 0), time(9, 0)),
+    "🧪 Тестовый 24/7": (127, time(0, 0), time(23, 59)),
+}
 MUTE_BUTTONS = {
     "1 час": 1,
     "3 часа": 3,
@@ -139,7 +156,8 @@ class ControlPlane:
             if connection is None:
                 if invite_token is None and access is not None and access.status == "active":
                     response = ControlResponse(
-                        "Подключите бота в Telegram Chat Automation, затем отправьте /start."
+                        "Подключите бота в Telegram Chat Automation, затем нажмите проверку.",
+                        _connection_keyboard(),
                     )
             else:
                 if (
@@ -148,8 +166,13 @@ class ControlPlane:
                 ):
                     return False
                 if access is None or not access.can_process:
-                    response = ControlResponse(
-                        "Подключение найдено. Продолжите первоначальную настройку кнопками."
+                    assert access is not None
+                    response = await self._onboarding(
+                        session,
+                        connection,
+                        access,
+                        choice=message.text.strip(),
+                        now=moment,
                     )
                 else:
                     intent = _control_intent(message.text, state=connection.control_state)
@@ -238,6 +261,129 @@ class ControlPlane:
             chat_id, text = target_notification
             await self.bot.send_message(chat_id=chat_id, text=text)
         return True
+
+    async def handle_business_connection(
+        self, owner_user_id: int, owner_chat_id: int, *, now: datetime | None = None
+    ) -> bool:
+        """Advance an approved user's onboarding after Telegram connects the bot."""
+        moment = now or datetime.now(UTC)
+        async with self.database.session() as session, session.begin():
+            access = await load_access_user(session, owner_user_id)
+            connection = await load_owner_connection(session, owner_user_id)
+            if (
+                access is None
+                or access.status != "active"
+                or access.can_process
+                or connection is None
+            ):
+                return False
+            response = await self._onboarding(session, connection, access, choice="", now=moment)
+        kwargs: dict[str, Any] = {"chat_id": owner_chat_id, "text": response.text}
+        if response.reply_markup is not None:
+            kwargs["reply_markup"] = response.reply_markup
+        await self.bot.send_message(**kwargs)
+        return True
+
+    async def _onboarding(
+        self,
+        session: Any,
+        connection: ConnectionRecord,
+        access: AccessUserRecord,
+        *,
+        choice: str,
+        now: datetime,
+    ) -> ControlResponse:
+        state = access.onboarding_state
+        if state == "awaiting_connection":
+            if not connection.policy.is_active:
+                return ControlResponse(
+                    "Подключение выключено. Включите бота в Chat Automation и проверьте снова.",
+                    _connection_keyboard(),
+                )
+            missing = _missing_onboarding_rights(connection)
+            if missing:
+                return ControlResponse(
+                    "Не хватает прав Telegram: "
+                    + ", ".join(missing)
+                    + ". Разрешите чтение и ответы, затем нажмите проверку.",
+                    _connection_keyboard(),
+                )
+            await set_onboarding_state(session, connection.owner_user_id, "timezone", now=now)
+            return ControlResponse("Шаг 1/3. Выберите часовой пояс.", _timezone_keyboard())
+        if state == "timezone":
+            timezone = TIMEZONE_BUTTONS.get(choice)
+            if timezone is None:
+                return ControlResponse(
+                    "Шаг 1/3. Выберите часовой пояс кнопкой.", _timezone_keyboard()
+                )
+            await set_owner_timezone(
+                session,
+                connection_id=connection.id,
+                user_id=connection.owner_user_id,
+                timezone=timezone,
+                now=now,
+            )
+            return ControlResponse(
+                f"Часовой пояс: {timezone}.\nШаг 2/3. Выберите расписание.",
+                _schedule_keyboard(),
+            )
+        if state == "schedule":
+            if choice == BUTTON_BACK:
+                await set_onboarding_state(session, connection.owner_user_id, "timezone", now=now)
+                return ControlResponse("Вернулись к выбору часового пояса.", _timezone_keyboard())
+            preset = SCHEDULE_BUTTONS.get(choice)
+            if preset is None:
+                return ControlResponse(
+                    "Шаг 2/3. Выберите безопасный preset расписания.",
+                    _schedule_keyboard(),
+                )
+            weekday_mask, time_from, time_to = preset
+            await set_owner_schedule(
+                session,
+                connection_id=connection.id,
+                user_id=connection.owner_user_id,
+                weekday_mask=weekday_mask,
+                time_from=time_from,
+                time_to=time_to,
+                now=now,
+            )
+            return ControlResponse(
+                "Шаг 3/3. В Chat Automation выберите Only Selected Chats "
+                "и добавьте один тестовый контакт.",
+                _scope_keyboard(),
+            )
+        if state == "scope":
+            if choice == BUTTON_BACK:
+                await set_onboarding_state(session, connection.owner_user_id, "schedule", now=now)
+                return ControlResponse("Вернулись к выбору расписания.", _schedule_keyboard())
+            if choice != BUTTON_SCOPE_CONFIRMED:
+                return ControlResponse(
+                    "Подтвердите Only Selected Chats только после настройки в Telegram.",
+                    _scope_keyboard(),
+                )
+            missing = _missing_onboarding_rights(connection)
+            if missing or not connection.policy.is_active:
+                await set_onboarding_state(
+                    session, connection.owner_user_id, "awaiting_connection", now=now
+                )
+                return ControlResponse(
+                    "Права или подключение изменились. Проверьте Chat Automation ещё раз.",
+                    _connection_keyboard(),
+                )
+            await complete_onboarding(
+                session,
+                connection_id=connection.id,
+                user_id=connection.owner_user_id,
+                now=now,
+            )
+            fresh = await self._fresh_connection(session, connection)
+            return ControlResponse(
+                "✅ Настройка завершена. Режим dry-run; "
+                "live доступен только с ручным подтверждением.",
+                _main_keyboard(fresh, now=now),
+            )
+        fresh = await self._fresh_connection(session, connection)
+        return ControlResponse("Настройка уже завершена.", _main_keyboard(fresh, now=now))
 
     async def _execute(
         self,
@@ -816,6 +962,55 @@ def _access_users_keyboard(users: list[AccessUserRecord]) -> InlineKeyboardMarku
                 ]
             )
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+def _missing_onboarding_rights(connection: ConnectionRecord) -> list[str]:
+    labels = {
+        "can_reply": "ответы",
+        "can_read_messages": "чтение сообщений",
+    }
+    return [label for key, label in labels.items() if not connection.rights.get(key, False)]
+
+
+def _connection_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=BUTTON_RECHECK_CONNECTION)]],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Подключите бота в Chat Automation",
+    )
+
+
+def _timezone_keyboard() -> ReplyKeyboardMarkup:
+    buttons = [KeyboardButton(text=label) for label in TIMEZONE_BUTTONS]
+    return ReplyKeyboardMarkup(
+        keyboard=[buttons[:2], buttons[2:]],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Выберите часовой пояс",
+    )
+
+
+def _schedule_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=label)] for label in SCHEDULE_BUTTONS]
+        + [[KeyboardButton(text=BUTTON_BACK)]],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Выберите расписание",
+    )
+
+
+def _scope_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BUTTON_SCOPE_CONFIRMED)],
+            [KeyboardButton(text=BUTTON_BACK)],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Подтвердите область чатов",
+    )
 
 
 def _main_keyboard(

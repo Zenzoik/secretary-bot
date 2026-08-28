@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -15,7 +16,13 @@ from secretary_bot.application import create_app
 from secretary_bot.config import Settings
 from secretary_bot.delayed import DelayedReplyQueue
 from secretary_bot.ingest import DeduplicationUnavailable
-from secretary_bot.storage import Database
+from secretary_bot.storage import (
+    Database,
+    approve_access_user,
+    consume_access_invite,
+    create_access_invite,
+    ensure_master,
+)
 from tests.test_delayed import FakeSortedSet
 from tests.test_pipeline import FakeNotifier
 
@@ -74,6 +81,28 @@ CONTACT_CALLBACK_UPDATE = {
         "from": {"id": 42, "is_bot": False, "first_name": "Owner"},
         "chat_instance": "instance",
         "data": "contact:100:exclude",
+    },
+}
+CUSTOMER_CONNECTION_UPDATE = {
+    "update_id": 20,
+    "business_connection": {
+        "id": "customer-connection",
+        "user": {"id": 99, "is_bot": False, "first_name": "Customer"},
+        "user_chat_id": 99,
+        "date": 1_700_000_000,
+        "rights": {"can_reply": True, "can_read_messages": True},
+        "is_enabled": True,
+    },
+}
+CUSTOMER_INCOMING_UPDATE = {
+    "update_id": 21,
+    "business_message": {
+        "message_id": 30,
+        "date": 1_700_000_001,
+        "business_connection_id": "customer-connection",
+        "chat": {"id": 200, "type": "private", "first_name": "Test Contact"},
+        "from": {"id": 200, "is_bot": False, "first_name": "Test Contact"},
+        "text": "onboarding must stay silent",
     },
 }
 
@@ -247,6 +276,24 @@ def test_unknown_owner_connection_is_denied_fail_closed(world) -> None:
     assert asyncio.run(_first(database, models.Connection)) is None
 
 
+def test_approved_owner_connection_starts_safe_onboarding(world) -> None:
+    client, bot, _, database = world
+    asyncio.run(_approve_customer(database))
+
+    with client:
+        assert post_update(client, CUSTOMER_CONNECTION_UPDATE).status_code == 200
+        wait_for(lambda: client.app.state.runtime.processed_updates == 1)
+        assert post_update(client, CUSTOMER_INCOMING_UPDATE).status_code == 200
+        wait_for(lambda: client.app.state.runtime.processed_updates == 2)
+
+    connection = asyncio.run(_first(database, models.Connection))
+    assert connection is not None
+    assert connection.owner_user_id == 99
+    assert connection.kill_switch is True
+    assert asyncio.run(_first(database, models.MessageLog)) is None
+    assert "часовой пояс" in bot.sent[-1]["text"]
+
+
 def test_incoming_message_is_gated_and_never_echoed(world) -> None:
     client, bot, queue, database = world
 
@@ -359,3 +406,27 @@ def test_redis_failure_returns_retryable_status(database: Database) -> None:
 async def _first(database: Database, model: Any) -> Any:
     async with database.session() as session:
         return await session.scalar(select(model))
+
+
+async def _approve_customer(database: Database) -> None:
+    async with database.session() as session, session.begin():
+        await ensure_master(session, 42)
+        token = await create_access_invite(
+            session,
+            created_by=42,
+            now=datetime.fromtimestamp(1_700_000_000, tz=UTC),
+            ttl=timedelta(hours=1),
+        )
+        await consume_access_invite(
+            session,
+            token=token,
+            user_id=99,
+            username="customer",
+            now=datetime.fromtimestamp(1_700_000_000, tz=UTC),
+        )
+        await approve_access_user(
+            session,
+            user_id=99,
+            approved_by=42,
+            now=datetime.fromtimestamp(1_700_000_000, tz=UTC),
+        )
