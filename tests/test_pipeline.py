@@ -16,7 +16,12 @@ from secretary_bot.hard_filter import HardFilterResult
 from secretary_bot.notifications import Preview
 from secretary_bot.pipeline import IncomingMessage, Pipeline
 from secretary_bot.sender import BusinessReplySender
-from secretary_bot.storage import ConnectionSnapshot, Database, upsert_connection
+from secretary_bot.storage import (
+    ConnectionSnapshot,
+    Database,
+    set_contact_template_override,
+    upsert_connection,
+)
 from secretary_bot.templates import DEFAULT_TEMPLATES, TemplateCode
 from tests.test_delayed import FakeSortedSet
 
@@ -188,6 +193,25 @@ async def test_temporary_mute_stops_a_task_scheduled_before_the_command(world) -
 
     assert action is LogAction.SKIPPED_KILL_SWITCH
     assert bot.sent == []
+
+
+@pytest.mark.asyncio
+async def test_contact_template_override_wins_over_classification(world) -> None:
+    pipeline, _, _, database = world
+    async with database.session() as session, session.begin():
+        await set_contact_template_override(
+            session,
+            1,
+            100,
+            template_code=TemplateCode.MONEY_PRIORITY.value,
+            template_text=DEFAULT_TEMPLATES[TemplateCode.MONEY_PRIORITY],
+        )
+
+    await pipeline.process_incoming(message(text="обычный вопрос"))
+    task = (await scheduled(pipeline))[0]
+
+    assert task.category == "general"
+    assert task.template_code == "money_priority"
 
 
 @pytest.mark.asyncio

@@ -68,6 +68,8 @@ async def handle_update(update: Update, state: RuntimeState) -> None:
         return
 
     if update.callback_query is not None:
+        if await state.control.handle_callback(update.callback_query):
+            return
         await _handle_feedback(update, state)
         return
 

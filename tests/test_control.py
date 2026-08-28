@@ -4,7 +4,7 @@ from datetime import UTC, datetime, time, timedelta
 from typing import Any
 
 import pytest
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 
 from secretary_bot import models
 from secretary_bot.actions import LogAction
@@ -13,6 +13,7 @@ from secretary_bot.gate import ContactState, GateDecision, evaluate_gate
 from secretary_bot.storage import (
     ConnectionSnapshot,
     Database,
+    load_contact_state,
     load_owner_connection,
     log_decision,
     upsert_connection,
@@ -24,9 +25,13 @@ NOW = datetime(2026, 8, 28, 9, 0, tzinfo=UTC)
 class FakeBot:
     def __init__(self) -> None:
         self.sent: list[dict[str, Any]] = []
+        self.answered: list[str] = []
 
     async def send_message(self, **kwargs: Any) -> None:
         self.sent.append(kwargs)
+
+    async def answer_callback_query(self, callback_query_id: str, **kwargs: Any) -> None:
+        self.answered.append(callback_query_id)
 
 
 def owner_message(text: str, *, owner_id: int = 42, chat_id: int = 42) -> Message:
@@ -37,6 +42,17 @@ def owner_message(text: str, *, owner_id: int = 42, chat_id: int = 42) -> Messag
             "chat": {"id": chat_id, "type": "private", "first_name": "Owner"},
             "from": {"id": owner_id, "is_bot": False, "first_name": "Owner"},
             "text": text,
+        }
+    )
+
+
+def owner_callback(data: str, *, owner_id: int = 42) -> CallbackQuery:
+    return CallbackQuery.model_validate(
+        {
+            "id": "callback-1",
+            "from": {"id": owner_id, "is_bot": False, "first_name": "Owner"},
+            "chat_instance": "instance",
+            "data": data,
         }
     )
 
@@ -152,4 +168,92 @@ async def test_unknown_or_unauthorized_commands_are_ignored(database: Database) 
 
     assert not await control.handle_message(owner_message("/unknown"), now=NOW)
     assert not await control.handle_message(owner_message("/off", owner_id=7, chat_id=7), now=NOW)
+    assert bot.sent == []
+
+
+@pytest.mark.asyncio
+async def test_business_deep_link_opens_the_requested_contact_card(database: Database) -> None:
+    await store_owner(database)
+    bot = FakeBot()
+
+    assert await ControlPlane(database, bot).handle_message(
+        owner_message("/start bizChat100"), now=NOW
+    )
+
+    assert "Контакт 100" in bot.sent[-1]["text"]
+    callbacks = [
+        button.callback_data
+        for row in bot.sent[-1]["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert "contact:100:exclude" in callbacks
+    assert "contact:100:today" in callbacks
+    assert all("101" not in callback for callback in callbacks if callback is not None)
+
+
+@pytest.mark.asyncio
+async def test_contact_card_can_exclude_forever(database: Database) -> None:
+    connection_id = await store_owner(database)
+    bot = FakeBot()
+
+    assert await ControlPlane(database, bot).handle_callback(
+        owner_callback("contact:100:exclude"), now=NOW
+    )
+
+    async with database.session() as session:
+        exclusion = await session.get(models.Exclusion, 1)
+        assert exclusion is not None
+        assert exclusion.connection_id == connection_id
+        assert exclusion.contact_id == 100
+        assert exclusion.until is None
+        connection = await load_owner_connection(session, 42)
+        assert connection is not None
+        state = await load_contact_state(session, connection_id, 100)
+        assert evaluate_gate(connection.policy, state, now=NOW).decision is (
+            GateDecision.SKIPPED_EXCLUDED
+        )
+
+
+@pytest.mark.asyncio
+async def test_contact_card_can_exclude_until_local_midnight(database: Database) -> None:
+    await store_owner(database)
+    bot = FakeBot()
+
+    assert await ControlPlane(database, bot).handle_callback(
+        owner_callback("contact:100:today"), now=NOW
+    )
+
+    async with database.session() as session:
+        exclusion = await session.get(models.Exclusion, 1)
+        assert exclusion is not None
+        assert exclusion.until == datetime(2026, 8, 28, 21, 0, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_contact_card_can_force_a_template(database: Database) -> None:
+    await store_owner(database)
+    bot = FakeBot()
+    control = ControlPlane(database, bot)
+
+    assert await control.handle_callback(owner_callback("contact:100:templates"), now=NOW)
+    assert "Выберите шаблон" in bot.sent[-1]["text"]
+    assert await control.handle_callback(
+        owner_callback("contact:100:template:money_priority"), now=NOW
+    )
+
+    async with database.session() as session:
+        override = await session.get(models.Override, 1)
+        assert override is not None and override.mode == "force_template"
+        template = await session.get(models.Template, override.template_id)
+        assert template is not None and template.code == "money_priority"
+
+
+@pytest.mark.asyncio
+async def test_contact_callback_from_a_stranger_is_ignored(database: Database) -> None:
+    await store_owner(database)
+    bot = FakeBot()
+
+    assert not await ControlPlane(database, bot).handle_callback(
+        owner_callback("contact:100:exclude", owner_id=7), now=NOW
+    )
     assert bot.sent == []

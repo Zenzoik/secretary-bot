@@ -61,6 +61,15 @@ CONTROL_UPDATE = {
         "text": "/status",
     },
 }
+CONTACT_CALLBACK_UPDATE = {
+    "update_id": 5,
+    "callback_query": {
+        "id": "contact-callback-1",
+        "from": {"id": 42, "is_bot": False, "first_name": "Owner"},
+        "chat_instance": "instance",
+        "data": "contact:100:exclude",
+    },
+}
 
 
 @dataclass
@@ -251,6 +260,19 @@ def test_owner_control_command_is_handled(world) -> None:
 
     assert len(bot.sent) == 1
     assert "Секретарь: включён" in bot.sent[0]["text"]
+
+
+def test_contact_card_callback_is_routed_before_feedback(world) -> None:
+    client, bot, _, database = world
+
+    with client:
+        assert post_update(client, CONNECTION_UPDATE).status_code == 200
+        assert post_update(client, CONTACT_CALLBACK_UPDATE).status_code == 200
+        wait_for(lambda: client.app.state.runtime.processed_updates == 2)
+
+    exclusion = asyncio.run(_first(database, models.Exclusion))
+    assert exclusion is not None and exclusion.contact_id == 100
+    assert bot.answered == ["contact-callback-1"]
 
 
 def test_duplicate_business_message_is_processed_once(world) -> None:

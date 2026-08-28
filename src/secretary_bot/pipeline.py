@@ -26,6 +26,7 @@ from secretary_bot.storage import (
     load_classifier_settings,
     load_connection,
     load_contact_state,
+    load_forced_template_code,
     load_templates,
     log_decision,
     owner_replied_since,
@@ -113,6 +114,9 @@ class Pipeline:
                 session, connection.id, defaults=self.classifier_defaults
             )
             classification = await classify(incoming.text, model=self.model, settings=settings)
+            forced_template = await load_forced_template_code(
+                session, connection.id, incoming.contact_id
+            )
 
         task = ReplyTask(
             connection_id=connection.id,
@@ -120,7 +124,7 @@ class Pipeline:
             contact_id=incoming.contact_id,
             chat_id=incoming.chat_id,
             message_id=incoming.message_id,
-            template_code=template_for(classification.category).value,
+            template_code=forced_template or template_for(classification.category).value,
             category=classification.category.value,
             incoming_at=incoming.received_at.isoformat(),
             confidence=None

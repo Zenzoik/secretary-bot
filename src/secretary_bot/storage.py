@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -18,6 +18,7 @@ from secretary_bot import models
 from secretary_bot.actions import LogAction
 from secretary_bot.classifier import ClassifierSettings
 from secretary_bot.gate import ConnectionPolicy, ContactState, Exclusion, QuietWindow
+from secretary_bot.templates import TemplateCode
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +41,17 @@ class ConnectionRecord:
     owner_chat_id: int | None
     dry_run: bool
     policy: ConnectionPolicy
+
+
+@dataclass(frozen=True, slots=True)
+class ContactCardRecord:
+    contact_id: int
+    contact_name: str | None
+    auto_reply_count: int
+    last_auto_reply_at: datetime | None
+    exclusion_until: datetime | None
+    permanently_excluded: bool
+    forced_template_code: str | None
 
 
 @dataclass(slots=True)
@@ -135,6 +147,137 @@ async def daily_action_counts(
         .order_by(models.MessageLog.action, models.MessageLog.category)
     )
     return [(action, category, count) for action, category, count in rows]
+
+
+async def load_contact_card(
+    session: AsyncSession,
+    connection_id: int,
+    contact_id: int,
+    *,
+    now: datetime,
+) -> ContactCardRecord:
+    exclusion = await session.scalar(
+        select(models.Exclusion).where(
+            models.Exclusion.connection_id == connection_id,
+            models.Exclusion.contact_id == contact_id,
+        )
+    )
+    stats = await session.execute(
+        select(func.count(), func.max(models.MessageLog.occurred_at)).where(
+            models.MessageLog.connection_id == connection_id,
+            models.MessageLog.contact_id == contact_id,
+            models.MessageLog.action.in_([LogAction.REPLIED.value, LogAction.DRY_RUN.value]),
+            models.MessageLog.occurred_at >= now - timedelta(days=30),
+        )
+    )
+    auto_reply_count, last_auto_reply_at = stats.one()
+    forced_template_code = await session.scalar(
+        select(models.Template.code)
+        .join(models.Override, models.Override.template_id == models.Template.id)
+        .where(
+            models.Override.connection_id == connection_id,
+            models.Override.contact_id == contact_id,
+            models.Override.mode == "force_template",
+            models.Template.is_active.is_(True),
+            models.Template.code.in_([code.value for code in TemplateCode]),
+        )
+    )
+    contact_name = None if exclusion is None else exclusion.contact_name
+    if contact_name is None:
+        contact_name = await session.scalar(
+            select(models.MorningQueue.contact_name)
+            .where(
+                models.MorningQueue.connection_id == connection_id,
+                models.MorningQueue.contact_id == contact_id,
+                models.MorningQueue.contact_name.is_not(None),
+            )
+            .order_by(models.MorningQueue.occurred_at.desc())
+            .limit(1)
+        )
+    return ContactCardRecord(
+        contact_id=contact_id,
+        contact_name=contact_name,
+        auto_reply_count=auto_reply_count,
+        last_auto_reply_at=last_auto_reply_at,
+        exclusion_until=None if exclusion is None else exclusion.until,
+        permanently_excluded=exclusion is not None and exclusion.until is None,
+        forced_template_code=forced_template_code,
+    )
+
+
+async def set_contact_exclusion(
+    session: AsyncSession,
+    connection_id: int,
+    contact_id: int,
+    *,
+    until: datetime | None,
+    reason: str,
+) -> None:
+    row = await session.scalar(
+        select(models.Exclusion).where(
+            models.Exclusion.connection_id == connection_id,
+            models.Exclusion.contact_id == contact_id,
+        )
+    )
+    if row is None:
+        row = models.Exclusion(connection_id=connection_id, contact_id=contact_id)
+        session.add(row)
+    row.until = until
+    row.reason = reason
+    await session.flush()
+
+
+async def set_contact_template_override(
+    session: AsyncSession,
+    connection_id: int,
+    contact_id: int,
+    *,
+    template_code: str,
+    template_text: str,
+) -> None:
+    template = await session.scalar(
+        select(models.Template).where(
+            models.Template.connection_id == connection_id,
+            models.Template.code == template_code,
+        )
+    )
+    if template is None:
+        template = models.Template(
+            connection_id=connection_id,
+            code=template_code,
+            text=template_text,
+            is_active=True,
+        )
+        session.add(template)
+        await session.flush()
+    override = await session.scalar(
+        select(models.Override).where(
+            models.Override.connection_id == connection_id,
+            models.Override.contact_id == contact_id,
+        )
+    )
+    if override is None:
+        override = models.Override(connection_id=connection_id, contact_id=contact_id)
+        session.add(override)
+    override.mode = "force_template"
+    override.template_id = template.id
+    await session.flush()
+
+
+async def load_forced_template_code(
+    session: AsyncSession, connection_id: int, contact_id: int
+) -> str | None:
+    return await session.scalar(
+        select(models.Template.code)
+        .join(models.Override, models.Override.template_id == models.Template.id)
+        .where(
+            models.Override.connection_id == connection_id,
+            models.Override.contact_id == contact_id,
+            models.Override.mode == "force_template",
+            models.Template.is_active.is_(True),
+            models.Template.code.in_([code.value for code in TemplateCode]),
+        )
+    )
 
 
 async def load_contact_state(
