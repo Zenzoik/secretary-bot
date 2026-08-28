@@ -29,7 +29,7 @@ from secretary_bot.notifications import OwnerNotifier, TelegramOwnerNotifier
 from secretary_bot.pipeline import Pipeline
 from secretary_bot.runtime import RuntimeState, TelegramBot, process_updates
 from secretary_bot.sender import BusinessReplySender
-from secretary_bot.storage import Database
+from secretary_bot.storage import Database, ensure_master
 from secretary_bot.workers import run_delayed_replies, run_morning_digest
 
 
@@ -84,6 +84,8 @@ def create_app(
             level=settings.log_level,
             format="%(asctime)s %(levelname)s %(name)s %(message)s",
         )
+        async with connection_database.session() as session, session.begin():
+            await ensure_master(session, settings.master_user_id)
         tasks = [
             asyncio.create_task(process_updates(state), name="telegram-update-worker"),
             asyncio.create_task(

@@ -14,7 +14,14 @@ from secretary_bot.control import ControlPlane
 from secretary_bot.hard_filter import apply_hard_filter
 from secretary_bot.notifications import parse_feedback
 from secretary_bot.pipeline import IncomingMessage, Pipeline
-from secretary_bot.storage import ConnectionSnapshot, record_feedback, upsert_connection
+from secretary_bot.storage import (
+    ConnectionSnapshot,
+    feedback_belongs_to_owner,
+    load_access_user,
+    record_feedback,
+    set_connection_control,
+    upsert_connection,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +106,13 @@ async def _handle_business_message(
         return
 
     connection = await _connection(connection_id, state, update_id=update_id)
+    if connection is None:
+        return
+    async with state.pipeline.database.session() as session:
+        access = await load_access_user(session, connection.user.id)
+        if access is None or not access.can_process:
+            _log(logging.INFO, "business_message_denied", update_id=update_id)
+            return
     if state.allowed_chat_ids and message.chat.id not in state.allowed_chat_ids:
         _log(
             logging.INFO,
@@ -132,6 +146,15 @@ async def _handle_feedback(update: Update, state: RuntimeState) -> None:
     log_id, verdict = parsed
     database = state.pipeline.database
     async with database.session() as session, session.begin():
+        access = await load_access_user(session, query.from_user.id)
+        if access is None or not access.can_process:
+            _log(logging.INFO, "feedback_denied", update_id=update.update_id)
+            return
+        if not await feedback_belongs_to_owner(
+            session, log_id=log_id, owner_user_id=query.from_user.id
+        ):
+            _log(logging.INFO, "feedback_cross_tenant_denied", update_id=update.update_id)
+            return
         await record_feedback(session, log_id=log_id, verdict=verdict)
     _log(logging.INFO, "shadow_feedback", log_id=log_id, verdict=verdict)
     labels = {
@@ -145,13 +168,13 @@ async def _handle_feedback(update: Update, state: RuntimeState) -> None:
 
 async def _connection(
     connection_id: str, state: RuntimeState, *, update_id: int
-) -> BusinessConnection:
+) -> BusinessConnection | None:
     connection = state.connections.get(connection_id)
     if connection is not None:
         return connection
     connection = await state.bot.get_business_connection(connection_id)
-    await _store_connection(connection, state, update_id=update_id, source="api_refresh")
-    return connection
+    stored = await _store_connection(connection, state, update_id=update_id, source="api_refresh")
+    return connection if stored else None
 
 
 async def _store_connection(
@@ -160,10 +183,18 @@ async def _store_connection(
     *,
     update_id: int,
     source: str = "update",
-) -> None:
-    state.connections[connection.id] = connection
+) -> bool:
     async with state.pipeline.database.session() as session, session.begin():
-        await upsert_connection(
+        access = await load_access_user(session, connection.user.id)
+        if access is None or not access.can_connect:
+            _log(
+                logging.WARNING,
+                "business_connection_denied",
+                update_id=update_id,
+                source=source,
+            )
+            return False
+        record = await upsert_connection(
             session,
             ConnectionSnapshot(
                 business_connection_id=connection.id,
@@ -174,7 +205,11 @@ async def _store_connection(
                 is_enabled=connection.is_enabled,
             ),
         )
+        if not access.can_process:
+            await set_connection_control(session, record.id, kill_switch=True, muted_until=None)
+    state.connections[connection.id] = connection
     _log_connection(connection, update_id=update_id, source=source)
+    return True
 
 
 def _contact_name(message: Message) -> str | None:

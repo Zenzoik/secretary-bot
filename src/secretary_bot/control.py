@@ -22,6 +22,7 @@ from secretary_bot.storage import (
     cancel_live_confirmation,
     confirm_live_mode,
     daily_action_counts,
+    load_access_user,
     load_contact_card,
     load_owner_connection,
     request_live_confirmation,
@@ -82,6 +83,9 @@ class ControlPlane:
 
         moment = now or datetime.now(UTC)
         async with self.database.session() as session, session.begin():
+            access = await load_access_user(session, sender.id)
+            if access is None or not access.can_process:
+                return False
             connection = await load_owner_connection(session, sender.id)
             if connection is None or (
                 connection.owner_chat_id is not None and connection.owner_chat_id != message.chat.id
@@ -112,6 +116,9 @@ class ControlPlane:
         moment = now or datetime.now(UTC)
 
         async with self.database.session() as session, session.begin():
+            access = await load_access_user(session, sender.id)
+            if access is None or not access.can_process:
+                return False
             connection = await load_owner_connection(session, sender.id)
             if connection is None:
                 return False

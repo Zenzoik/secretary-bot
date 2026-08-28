@@ -34,7 +34,11 @@ class MorningDigest:
         delivered = 0
         async with self.database.session() as session, session.begin():
             for connection in await list_connections(session):
-                if not connection.policy.is_active or connection.owner_chat_id is None:
+                if (
+                    not connection.policy.is_active
+                    or connection.policy.kill_switch
+                    or connection.owner_chat_id is None
+                ):
                     continue
                 local_now = moment.astimezone(ZoneInfo(connection.policy.timezone))
                 if not is_delivery_time(local_now):

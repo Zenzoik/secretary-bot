@@ -24,6 +24,7 @@ from secretary_bot.gate import ContactState, GateDecision, evaluate_gate
 from secretary_bot.storage import (
     ConnectionSnapshot,
     Database,
+    ensure_master,
     load_contact_state,
     load_owner_connection,
     log_decision,
@@ -87,6 +88,7 @@ def keyboard_texts(message: dict[str, Any]) -> list[str]:
 
 async def store_owner(database: Database) -> int:
     async with database.session() as session, session.begin():
+        await ensure_master(session, 42)
         connection = await upsert_connection(
             session,
             ConnectionSnapshot(

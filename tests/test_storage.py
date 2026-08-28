@@ -111,9 +111,23 @@ async def test_master_can_revoke_but_not_demote_itself(session: AsyncSession) ->
     await consume_access_invite(session, token=token, user_id=99, username=None, now=NOW)
     await approve_access_user(session, user_id=99, approved_by=42, now=NOW)
 
+    connection = await upsert_connection(
+        session, ConnectionSnapshot("customer-connection", owner_user_id=99)
+    )
+    await session.execute(
+        models.Connection.__table__.update()
+        .where(models.Connection.id == connection.id)
+        .values(dry_run=False, kill_switch=False, live_confirmation_until=NOW + timedelta(hours=1))
+    )
+
     assert await revoke_access_user(session, user_id=99, revoked_by=42, now=NOW)
     revoked = await load_access_user(session, 99)
     assert revoked is not None and revoked.status == "revoked"
+    connection_row = await session.get(models.Connection, connection.id)
+    assert connection_row is not None
+    assert connection_row.dry_run is True
+    assert connection_row.kill_switch is True
+    assert connection_row.live_confirmation_until is None
     assert not await revoke_access_user(session, user_id=42, revoked_by=42, now=NOW)
 
 

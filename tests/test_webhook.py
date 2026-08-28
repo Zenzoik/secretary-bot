@@ -140,6 +140,8 @@ def world(database: Database):
     settings = Settings(
         bot_token="123456:TEST_TOKEN",
         webhook_secret=SECRET,
+        master_user_id=42,
+        bot_username="secretary_test_bot",
         database_url="sqlite+aiosqlite:///:memory:",
     )
     app = create_app(
@@ -223,6 +225,26 @@ def test_connection_update_is_stored(world) -> None:
     assert row.owner_chat_id == 42
     assert row.rights_json == {"can_reply": True}
     assert row.dry_run is True, "a new connection must not answer anyone yet"
+
+
+def test_unknown_owner_connection_is_denied_fail_closed(world) -> None:
+    client, _, _, database = world
+    unauthorized = {
+        **CONNECTION_UPDATE,
+        "update_id": 99,
+        "business_connection": {
+            **CONNECTION_UPDATE["business_connection"],
+            "id": "unauthorized-connection",
+            "user": {"id": 99, "is_bot": False, "first_name": "Unknown"},
+            "user_chat_id": 99,
+        },
+    }
+
+    with client:
+        assert post_update(client, unauthorized).status_code == 200
+        wait_for(lambda: client.app.state.runtime.processed_updates == 1)
+
+    assert asyncio.run(_first(database, models.Connection)) is None
 
 
 def test_incoming_message_is_gated_and_never_echoed(world) -> None:
@@ -311,6 +333,8 @@ def test_redis_failure_returns_retryable_status(database: Database) -> None:
     settings = Settings(
         bot_token="123456:TEST_TOKEN",
         webhook_secret=SECRET,
+        master_user_id=42,
+        bot_username="secretary_test_bot",
         database_url="sqlite+aiosqlite:///:memory:",
     )
     client = TestClient(

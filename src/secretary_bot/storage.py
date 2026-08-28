@@ -236,7 +236,34 @@ async def revoke_access_user(
             status_changed_at=now,
         )
     )
+    if changed.rowcount:
+        await session.execute(
+            update(models.Connection)
+            .where(models.Connection.owner_user_id == user_id)
+            .values(
+                dry_run=True,
+                kill_switch=True,
+                muted_until=None,
+                live_confirmation_until=None,
+                control_state="main",
+            )
+        )
     return bool(changed.rowcount)
+
+
+async def feedback_belongs_to_owner(
+    session: AsyncSession, *, log_id: int, owner_user_id: int
+) -> bool:
+    return bool(
+        await session.scalar(
+            select(models.MessageLog.id)
+            .join(models.Connection, models.Connection.id == models.MessageLog.connection_id)
+            .where(
+                models.MessageLog.id == log_id,
+                models.Connection.owner_user_id == owner_user_id,
+            )
+        )
+    )
 
 
 async def upsert_connection(
