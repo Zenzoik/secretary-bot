@@ -11,9 +11,12 @@ from secretary_bot.storage import (
     ConnectionRecord,
     ContactCardRecord,
     Database,
+    cancel_live_confirmation,
+    confirm_live_mode,
     daily_action_counts,
     load_contact_card,
     load_owner_connection,
+    request_live_confirmation,
     set_connection_control,
     set_contact_exclusion,
     set_contact_template_override,
@@ -21,6 +24,7 @@ from secretary_bot.storage import (
 from secretary_bot.templates import DEFAULT_TEMPLATES, TemplateCode
 
 MAX_MUTE_HOURS = 168
+LIVE_CONFIRMATION_TTL = timedelta(minutes=5)
 
 
 class ControlBot(Protocol):
@@ -48,7 +52,7 @@ class ControlPlane:
             return False
 
         command, argument = parsed
-        if command not in {"start", "status", "off", "on", "mute", "today"}:
+        if command not in {"start", "status", "off", "on", "mute", "today", "live"}:
             return False
 
         moment = now or datetime.now(UTC)
@@ -70,25 +74,32 @@ class ControlPlane:
         return True
 
     async def handle_callback(self, query: CallbackQuery, *, now: datetime | None = None) -> bool:
-        parsed = _parse_contact_callback(query.data)
-        if parsed is None:
+        contact = _parse_contact_callback(query.data)
+        live_action = _parse_live_callback(query.data)
+        if contact is None and live_action is None:
             return False
         sender = query.from_user
         moment = now or datetime.now(UTC)
-        contact_id, action, argument = parsed
 
         async with self.database.session() as session, session.begin():
             connection = await load_owner_connection(session, sender.id)
             if connection is None:
                 return False
-            response = await self._contact_action(
-                session,
-                connection,
-                contact_id=contact_id,
-                action=action,
-                argument=argument,
-                now=moment,
-            )
+            if contact is not None:
+                contact_id, action, argument = contact
+                response = await self._contact_action(
+                    session,
+                    connection,
+                    contact_id=contact_id,
+                    action=action,
+                    argument=argument,
+                    now=moment,
+                )
+            else:
+                assert live_action is not None
+                response = await self._live_action(
+                    session, connection, action=live_action, now=moment
+                )
 
         await self.bot.answer_callback_query(query.id, text="Готово")
         if response is not None and connection.owner_chat_id is not None:
@@ -120,6 +131,7 @@ class ControlPlane:
             return ControlResponse(_render_status(connection, now=now))
         if command == "off":
             await set_connection_control(session, connection.id, kill_switch=True, muted_until=None)
+            await cancel_live_confirmation(session, connection.id)
             return ControlResponse(
                 "⛔ Секретарь выключен. Уже запланированные ответы тоже остановлены."
             )
@@ -140,6 +152,16 @@ class ControlPlane:
             )
             local_until = until.astimezone(ZoneInfo(connection.policy.timezone))
             return ControlResponse(f"⏸ Пауза до {local_until:%d.%m %H:%M} ({hours} ч).")
+        if command == "live":
+            if not connection.dry_run:
+                return ControlResponse("Live-режим уже включён.")
+            await request_live_confirmation(
+                session, connection.id, until=now + LIVE_CONFIRMATION_TTL
+            )
+            return ControlResponse(
+                "⚠️ Включить live? После подтверждения бот сможет отвечать контактам.",
+                _live_keyboard(),
+            )
 
         zone = ZoneInfo(connection.policy.timezone)
         local_now = now.astimezone(zone)
@@ -200,6 +222,21 @@ class ControlPlane:
             return ControlResponse(f"✏️ Для контакта выбран шаблон: {code.value}.")
         return None
 
+    async def _live_action(
+        self,
+        session: Any,
+        connection: ConnectionRecord,
+        *,
+        action: str,
+        now: datetime,
+    ) -> ControlResponse:
+        if action == "cancel":
+            await cancel_live_confirmation(session, connection.id)
+            return ControlResponse("Dry-run сохранён. Live-режим не включён.")
+        if await confirm_live_mode(session, connection.id, now=now):
+            return ControlResponse("⚠️ Live-режим включён. Бот может отвечать контактам.")
+        return ControlResponse("Подтверждение истекло. Повторите /live.")
+
 
 def _parse_command(text: str | None) -> tuple[str, str] | None:
     if not text:
@@ -240,6 +277,13 @@ def _parse_contact_callback(data: str | None) -> tuple[int, str, str | None] | N
     if action == "template" and argument is None:
         return None
     return contact_id, action, argument
+
+
+def _parse_live_callback(data: str | None) -> str | None:
+    parts = (data or "").split(":")
+    if len(parts) != 2 or parts[0] != "live" or parts[1] not in {"confirm", "cancel"}:
+        return None
+    return parts[1]
 
 
 def _render_status(connection: ConnectionRecord, *, now: datetime) -> str:
@@ -345,5 +389,14 @@ def _template_keyboard(contact_id: int) -> InlineKeyboardMarkup:
                     callback_data=f"contact:{contact_id}:template:money_priority",
                 )
             ],
+        ]
+    )
+
+
+def _live_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⚠️ Да, включить live", callback_data="live:confirm")],
+            [InlineKeyboardButton(text="Отмена", callback_data="live:cancel")],
         ]
     )

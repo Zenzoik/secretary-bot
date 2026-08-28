@@ -129,6 +129,46 @@ async def set_connection_control(
     await session.flush()
 
 
+async def request_live_confirmation(
+    session: AsyncSession, connection_id: int, *, until: datetime
+) -> None:
+    row = await session.get(models.Connection, connection_id)
+    if row is None:
+        raise LookupError("connection not found")
+    row.live_confirmation_until = until
+    await session.flush()
+
+
+async def cancel_live_confirmation(session: AsyncSession, connection_id: int) -> None:
+    row = await session.get(models.Connection, connection_id)
+    if row is None:
+        raise LookupError("connection not found")
+    row.live_confirmation_until = None
+    await session.flush()
+
+
+async def confirm_live_mode(session: AsyncSession, connection_id: int, *, now: datetime) -> bool:
+    confirmed = await session.scalar(
+        update(models.Connection)
+        .where(
+            models.Connection.id == connection_id,
+            models.Connection.dry_run.is_(True),
+            models.Connection.live_confirmation_until.is_not(None),
+            models.Connection.live_confirmation_until > now,
+        )
+        .values(dry_run=False, live_confirmation_until=None)
+        .returning(models.Connection.id)
+    )
+    if confirmed is not None:
+        return True
+    await session.execute(
+        update(models.Connection)
+        .where(models.Connection.id == connection_id)
+        .values(live_confirmation_until=None)
+    )
+    return False
+
+
 async def daily_action_counts(
     session: AsyncSession,
     connection_id: int,

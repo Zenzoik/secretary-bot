@@ -257,3 +257,74 @@ async def test_contact_callback_from_a_stranger_is_ignored(database: Database) -
         owner_callback("contact:100:exclude", owner_id=7), now=NOW
     )
     assert bot.sent == []
+
+
+@pytest.mark.asyncio
+async def test_live_command_requires_a_separate_confirmation(database: Database) -> None:
+    await store_owner(database)
+    bot = FakeBot()
+    control = ControlPlane(database, bot)
+
+    assert await control.handle_message(owner_message("/live"), now=NOW)
+    async with database.session() as session:
+        connection = await load_owner_connection(session, 42)
+        assert connection is not None and connection.dry_run is True
+    callbacks = [
+        button.callback_data
+        for row in bot.sent[-1]["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert callbacks == ["live:confirm", "live:cancel"]
+
+    assert await control.handle_callback(owner_callback("live:confirm"), now=NOW)
+    async with database.session() as session:
+        connection = await load_owner_connection(session, 42)
+        assert connection is not None and connection.dry_run is False
+
+
+@pytest.mark.asyncio
+async def test_expired_live_confirmation_keeps_dry_run(database: Database) -> None:
+    await store_owner(database)
+    bot = FakeBot()
+    control = ControlPlane(database, bot)
+
+    assert await control.handle_message(owner_message("/live"), now=NOW)
+    assert await control.handle_callback(
+        owner_callback("live:confirm"), now=NOW + timedelta(minutes=5)
+    )
+
+    async with database.session() as session:
+        connection = await load_owner_connection(session, 42)
+        assert connection is not None and connection.dry_run is True
+    assert "истекло" in bot.sent[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_live_confirmation_keeps_dry_run(database: Database) -> None:
+    await store_owner(database)
+    bot = FakeBot()
+    control = ControlPlane(database, bot)
+
+    assert await control.handle_message(owner_message("/live"), now=NOW)
+    assert await control.handle_callback(owner_callback("live:cancel"), now=NOW)
+
+    async with database.session() as session:
+        connection = await load_owner_connection(session, 42)
+        assert connection is not None and connection.dry_run is True
+
+
+@pytest.mark.asyncio
+async def test_off_invalidates_a_pending_live_confirmation(database: Database) -> None:
+    await store_owner(database)
+    bot = FakeBot()
+    control = ControlPlane(database, bot)
+
+    assert await control.handle_message(owner_message("/live"), now=NOW)
+    assert await control.handle_message(owner_message("/off"), now=NOW)
+    assert await control.handle_callback(owner_callback("live:confirm"), now=NOW)
+
+    async with database.session() as session:
+        connection = await load_owner_connection(session, 42)
+        assert connection is not None
+        assert connection.dry_run is True
+        assert connection.policy.kill_switch is True
