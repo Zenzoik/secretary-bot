@@ -17,12 +17,15 @@ from secretary_bot.storage import (
     claim_window,
     consume_access_invite,
     create_access_invite,
+    daily_action_counts,
     enqueue_morning,
     ensure_master,
+    feedback_belongs_to_owner,
     load_access_user,
     load_classifier_settings,
     load_connection,
     load_contact_state,
+    load_forced_template_code,
     load_templates,
     log_decision,
     owner_replied_since,
@@ -31,6 +34,9 @@ from secretary_bot.storage import (
     record_incoming,
     record_owner_reply,
     revoke_access_user,
+    set_contact_exclusion,
+    set_contact_template_override,
+    set_control_state,
     upsert_connection,
 )
 
@@ -64,6 +70,10 @@ async def test_master_bootstrap_is_unique_and_environment_owned(session: AsyncSe
 async def test_invite_is_one_time_pending_until_master_approval(session: AsyncSession) -> None:
     await ensure_master(session, 42)
     token = await create_access_invite(session, created_by=42, now=NOW, ttl=timedelta(hours=24))
+    invite = await session.scalar(select(models.AccessInvite))
+    assert invite is not None
+    assert invite.token_hash != token.encode()
+    assert len(invite.token_hash) == 32
 
     pending = await consume_access_invite(
         session, token=token, user_id=99, username="customer", now=NOW
@@ -129,6 +139,96 @@ async def test_master_can_revoke_but_not_demote_itself(session: AsyncSession) ->
     assert connection_row.kill_switch is True
     assert connection_row.live_confirmation_until is None
     assert not await revoke_access_user(session, user_id=42, revoked_by=42, now=NOW)
+
+    new_token = await create_access_invite(session, created_by=42, now=NOW, ttl=timedelta(hours=1))
+    reinvited = await consume_access_invite(
+        session,
+        token=new_token,
+        user_id=99,
+        username=None,
+        now=NOW,
+    )
+    assert reinvited is not None and reinvited.status == "pending"
+    connection_row = await session.get(models.Connection, connection.id)
+    assert connection_row is not None
+    assert connection_row.dry_run is True
+    assert connection_row.kill_switch is True
+
+
+@pytest.mark.asyncio
+async def test_two_owners_with_the_same_contact_are_fully_isolated(
+    session: AsyncSession,
+) -> None:
+    first = await upsert_connection(session, SNAPSHOT)
+    second = await upsert_connection(
+        session, ConnectionSnapshot("connection-2", owner_user_id=99, owner_chat_id=99)
+    )
+    session.add_all(
+        [
+            models.Schedule(
+                connection_id=first.id,
+                weekday_mask=127,
+                time_from=time(22, 0),
+                time_to=time(8, 0),
+            ),
+            models.Schedule(
+                connection_id=second.id,
+                weekday_mask=31,
+                time_from=time(18, 0),
+                time_to=time(9, 0),
+            ),
+        ]
+    )
+    await set_contact_exclusion(session, first.id, 100, until=None, reason="first_owner_only")
+    await set_contact_template_override(
+        session,
+        first.id,
+        100,
+        template_code="money_priority",
+        template_text="first owner template",
+    )
+    await claim_window(session, first.id, 100, window_key="first-window")
+    await set_control_state(session, first.id, "mute_hours")
+    first_log_id = await log_decision(
+        session,
+        connection_id=first.id,
+        contact_id=100,
+        action=LogAction.DRY_RUN,
+        category="general",
+        occurred_at=NOW,
+    )
+    second_log_id = await log_decision(
+        session,
+        connection_id=second.id,
+        contact_id=100,
+        action=LogAction.DRY_RUN,
+        category="money",
+        occurred_at=NOW,
+    )
+
+    first_record = await load_connection(session, "connection-1")
+    second_record = await load_connection(session, "connection-2")
+    assert first_record is not None and second_record is not None
+    assert first_record.policy.windows[0].time_from == time(22, 0)
+    assert second_record.policy.windows[0].time_from == time(18, 0)
+    assert first_record.control_state == "mute_hours"
+    assert second_record.control_state == "main"
+    assert (await load_contact_state(session, first.id, 100)).exclusion is not None
+    assert (await load_contact_state(session, second.id, 100)).exclusion is None
+    assert await load_forced_template_code(session, first.id, 100) == "money_priority"
+    assert await load_forced_template_code(session, second.id, 100) is None
+    assert await load_templates(session, first.id) == {"money_priority": "first owner template"}
+    assert await load_templates(session, second.id) == {}
+    first_counts = await daily_action_counts(
+        session, first.id, since=NOW - timedelta(minutes=1), until=NOW + timedelta(minutes=1)
+    )
+    second_counts = await daily_action_counts(
+        session, second.id, since=NOW - timedelta(minutes=1), until=NOW + timedelta(minutes=1)
+    )
+    assert first_counts == [("dry_run", "general", 1)]
+    assert second_counts == [("dry_run", "money", 1)]
+    assert await feedback_belongs_to_owner(session, log_id=first_log_id, owner_user_id=42)
+    assert not await feedback_belongs_to_owner(session, log_id=second_log_id, owner_user_id=42)
 
 
 @pytest.mark.asyncio

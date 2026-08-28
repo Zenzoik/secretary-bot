@@ -76,6 +76,7 @@ def create_app(
             database=connection_database,
             bot=telegram_bot,
             bot_username=settings.bot_username,
+            delayed_queue=replies,
         ),
         queue_size=settings.update_queue_size,
         allowed_chat_ids=settings.allowed_chat_ids,

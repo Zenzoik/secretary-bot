@@ -63,6 +63,15 @@ class FakeBot:
         self.edited.append(kwargs)
 
 
+class RecordingQueue:
+    def __init__(self) -> None:
+        self.cancelled: list[int] = []
+
+    async def cancel_connection(self, connection_id: int) -> int:
+        self.cancelled.append(connection_id)
+        return 1
+
+
 def owner_message(text: str, *, owner_id: int = 42, chat_id: int = 42) -> Message:
     return Message.model_validate(
         {
@@ -205,16 +214,24 @@ async def test_master_approves_and_revokes_a_pending_candidate(database: Databas
     assert callbacks == ["access:approve:99", "access:revoke:99"]
 
     assert await control.handle_callback(owner_callback("access:approve:99"), now=NOW)
+    async with database.session() as session, session.begin():
+        customer_connection = await upsert_connection(
+            session,
+            ConnectionSnapshot("customer-connection", owner_user_id=99, owner_chat_id=99),
+        )
     async with database.session() as session:
         candidate = await load_access_user(session, 99)
         assert candidate is not None and candidate.status == "active"
     assert bot.edited[-1]["reply_markup"] is None
     assert "Доступ подтверждён" in bot.sent[-1]["text"]
 
+    queue = RecordingQueue()
+    control.delayed_queue = queue  # type: ignore[assignment]
     assert await control.handle_callback(owner_callback("access:revoke:99"), now=NOW)
     async with database.session() as session:
         candidate = await load_access_user(session, 99)
         assert candidate is not None and candidate.status == "revoked"
+    assert queue.cancelled == [customer_connection.id]
 
 
 @pytest.mark.asyncio

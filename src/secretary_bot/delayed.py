@@ -88,3 +88,13 @@ class DelayedReplyQueue:
 
     async def pending(self) -> int:
         return await self.client.zcard(self.key)
+
+    async def cancel_connection(self, connection_id: int) -> int:
+        """Remove every pending task owned by one revoked connection."""
+        members = await self.client.zrangebyscore(self.key, float("-inf"), float("inf"))
+        cancelled = 0
+        for member in members:
+            task = ReplyTask.from_json(member)
+            if task.connection_id == connection_id:
+                cancelled += await self.client.zrem(self.key, member)
+        return cancelled

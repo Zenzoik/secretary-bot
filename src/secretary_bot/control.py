@@ -15,6 +15,7 @@ from aiogram.types import (
 )
 
 from secretary_bot.callbacks import finalize_callback
+from secretary_bot.delayed import DelayedReplyQueue
 from secretary_bot.storage import (
     AccessUserRecord,
     ConnectionRecord,
@@ -103,6 +104,7 @@ class ControlPlane:
     database: Database
     bot: ControlBot
     bot_username: str = ""
+    delayed_queue: DelayedReplyQueue | None = None
 
     async def handle_message(self, message: Message, *, now: datetime | None = None) -> bool:
         """Handle a private owner command; return whether it belonged to us."""
@@ -207,6 +209,7 @@ class ControlPlane:
         sender = query.from_user
         moment = now or datetime.now(UTC)
         target_notification: tuple[int, str] | None = None
+        cancel_connection_id: int | None = None
 
         async with self.database.session() as session, session.begin():
             access = await load_access_user(session, sender.id)
@@ -214,7 +217,7 @@ class ControlPlane:
                 if access is None or not access.is_master:
                     return False
                 action, target_id = access_action
-                response, target_notification = await self._access_action(
+                response, target_notification, cancel_connection_id = await self._access_action(
                     session,
                     action=action,
                     target_id=target_id,
@@ -249,6 +252,8 @@ class ControlPlane:
 
         note, toast = _callback_feedback(contact, live_action, access_action)
         await finalize_callback(self.bot, query, note=note, toast=toast)
+        if cancel_connection_id is not None and self.delayed_queue is not None:
+            await self.delayed_queue.cancel_connection(cancel_connection_id)
         if response is not None:
             kwargs: dict[str, Any] = {
                 "chat_id": sender.id,
@@ -630,7 +635,8 @@ class ControlPlane:
         target_id: int,
         master_id: int,
         now: datetime,
-    ) -> tuple[ControlResponse, tuple[int, str] | None]:
+    ) -> tuple[ControlResponse, tuple[int, str] | None, int | None]:
+        cancel_connection_id = None
         if action == "approve":
             changed = await approve_access_user(
                 session, user_id=target_id, approved_by=master_id, now=now
@@ -650,6 +656,7 @@ class ControlPlane:
                 else None
             )
         else:
+            target_connection = await load_owner_connection(session, target_id)
             changed = await revoke_access_user(
                 session, user_id=target_id, revoked_by=master_id, now=now
             )
@@ -666,11 +673,13 @@ class ControlPlane:
                 if changed
                 else None
             )
+            if changed and target_connection is not None:
+                cancel_connection_id = target_connection.id
         connection = await load_owner_connection(session, master_id)
         keyboard = (
             None if connection is None else _main_keyboard(connection, now=now, is_master=True)
         )
-        return ControlResponse(text, keyboard), notification
+        return ControlResponse(text, keyboard), notification, cancel_connection_id
 
 
 def _parse_command(text: str | None) -> tuple[str, str] | None:

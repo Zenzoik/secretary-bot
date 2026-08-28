@@ -132,3 +132,21 @@ async def test_tasks_left_by_a_stopped_process_are_picked_up_on_restart() -> Non
     restarted = DelayedReplyQueue(client=client)
 
     assert await restarted.pop_due(now=NOW + timedelta(minutes=30)) == [TASK]
+
+
+@pytest.mark.asyncio
+async def test_revoking_one_connection_only_cancels_its_tasks() -> None:
+    queue = DelayedReplyQueue(client=FakeSortedSet())
+    same_owner_later = replace(TASK, message_id=8)
+    other_owner = replace(
+        TASK,
+        connection_id=2,
+        business_connection_id="connection-2",
+        message_id=9,
+    )
+    for task in (TASK, same_owner_later, other_owner):
+        await queue.schedule(task, due_at=NOW + timedelta(minutes=5))
+
+    assert await queue.cancel_connection(1) == 2
+    assert await queue.pending() == 1
+    assert await queue.pop_due(now=NOW + timedelta(minutes=10)) == [other_owner]
