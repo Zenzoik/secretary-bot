@@ -183,6 +183,21 @@ async def test_shadow_feedback_attaches_to_a_logged_decision(session: AsyncSessi
 
 
 @pytest.mark.asyncio
+async def test_repeated_feedback_updates_the_existing_row(session: AsyncSession) -> None:
+    connection_id = await stored_connection(session)
+    log_id = await log_decision(
+        session, connection_id=connection_id, contact_id=100, action=LogAction.DRY_RUN
+    )
+
+    first_id = await record_feedback(session, log_id=log_id, verdict="ok")
+    second_id = await record_feedback(session, log_id=log_id, verdict="wrong")
+
+    assert second_id == first_id
+    row = await session.get(models.ShadowFeedback, first_id)
+    assert row is not None and row.verdict == "wrong"
+
+
+@pytest.mark.asyncio
 async def test_money_messages_queue_for_the_morning(session: AsyncSession) -> None:
     connection_id = await stored_connection(session)
 

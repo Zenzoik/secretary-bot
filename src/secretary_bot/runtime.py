@@ -9,6 +9,7 @@ from typing import Any, Protocol
 
 from aiogram.types import BusinessConnection, Message, Update
 
+from secretary_bot.callbacks import finalize_callback
 from secretary_bot.control import ControlPlane
 from secretary_bot.hard_filter import apply_hard_filter
 from secretary_bot.notifications import parse_feedback
@@ -24,6 +25,10 @@ class TelegramBot(Protocol):
     async def send_message(self, **kwargs: Any) -> Any: ...
 
     async def answer_callback_query(self, callback_query_id: str, **kwargs: Any) -> Any: ...
+
+    async def edit_message_text(self, **kwargs: Any) -> Any: ...
+
+    async def edit_message_reply_markup(self, **kwargs: Any) -> Any: ...
 
 
 @dataclass(slots=True)
@@ -129,7 +134,13 @@ async def _handle_feedback(update: Update, state: RuntimeState) -> None:
     async with database.session() as session, session.begin():
         await record_feedback(session, log_id=log_id, verdict=verdict)
     _log(logging.INFO, "shadow_feedback", log_id=log_id, verdict=verdict)
-    await state.bot.answer_callback_query(query.id, text="Записал")
+    labels = {
+        "ok": ("✅ Обработано: оценка «Норм»", "Записал: Норм"),
+        "wrong": ("✅ Обработано: оценка «Не надо было»", "Записал оценку"),
+        "exclude": ("✅ Обработано: кандидат на исключение", "Записал оценку"),
+    }
+    note, toast = labels[verdict]
+    await finalize_callback(state.bot, query, note=note, toast=toast)
 
 
 async def _connection(

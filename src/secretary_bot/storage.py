@@ -493,6 +493,13 @@ async def mark_morning_delivered(session: AsyncSession, ids: Sequence[int]) -> N
 
 
 async def record_feedback(session: AsyncSession, *, log_id: int, verdict: str) -> int:
+    existing = await session.scalar(
+        select(models.ShadowFeedback).where(models.ShadowFeedback.log_id == log_id)
+    )
+    if existing is not None:
+        existing.verdict = verdict
+        await session.flush()
+        return existing.id
     row = models.ShadowFeedback(log_id=log_id, verdict=verdict)
     session.add(row)
     await session.flush()

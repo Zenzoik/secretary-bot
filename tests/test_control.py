@@ -26,12 +26,19 @@ class FakeBot:
     def __init__(self) -> None:
         self.sent: list[dict[str, Any]] = []
         self.answered: list[str] = []
+        self.edited: list[dict[str, Any]] = []
 
     async def send_message(self, **kwargs: Any) -> None:
         self.sent.append(kwargs)
 
     async def answer_callback_query(self, callback_query_id: str, **kwargs: Any) -> None:
         self.answered.append(callback_query_id)
+
+    async def edit_message_text(self, **kwargs: Any) -> None:
+        self.edited.append(kwargs)
+
+    async def edit_message_reply_markup(self, **kwargs: Any) -> None:
+        self.edited.append(kwargs)
 
 
 def owner_message(text: str, *, owner_id: int = 42, chat_id: int = 42) -> Message:
@@ -53,6 +60,12 @@ def owner_callback(data: str, *, owner_id: int = 42) -> CallbackQuery:
             "from": {"id": owner_id, "is_bot": False, "first_name": "Owner"},
             "chat_instance": "instance",
             "data": data,
+            "message": {
+                "message_id": 5,
+                "date": NOW,
+                "chat": {"id": 42, "type": "private", "first_name": "Owner"},
+                "text": "Contact action",
+            },
         }
     )
 
@@ -212,6 +225,8 @@ async def test_contact_card_can_exclude_forever(database: Database) -> None:
         assert evaluate_gate(connection.policy, state, now=NOW).decision is (
             GateDecision.SKIPPED_EXCLUDED
         )
+    assert bot.edited[-1]["reply_markup"] is None
+    assert "исключён навсегда" in bot.edited[-1]["text"]
 
 
 @pytest.mark.asyncio

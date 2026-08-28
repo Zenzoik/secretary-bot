@@ -49,6 +49,12 @@ FEEDBACK_UPDATE = {
         "from": {"id": 42, "is_bot": False, "first_name": "Owner"},
         "chat_instance": "instance",
         "data": "feedback:1:ok",
+        "message": {
+            "message_id": 20,
+            "date": 1_700_000_002,
+            "chat": {"id": 42, "type": "private", "first_name": "Owner"},
+            "text": "Dry-run preview",
+        },
     },
 }
 CONTROL_UPDATE = {
@@ -81,6 +87,7 @@ class FakeBot:
     def __init__(self) -> None:
         self.sent: list[dict[str, Any]] = []
         self.answered: list[str] = []
+        self.edited: list[dict[str, Any]] = []
         self.connections: dict[str, BusinessConnection] = {}
 
     async def get_business_connection(self, connection_id: str) -> BusinessConnection:
@@ -92,6 +99,14 @@ class FakeBot:
 
     async def answer_callback_query(self, callback_query_id: str, **kwargs: Any) -> bool:
         self.answered.append(callback_query_id)
+        return True
+
+    async def edit_message_text(self, **kwargs: Any) -> bool:
+        self.edited.append(kwargs)
+        return True
+
+    async def edit_message_reply_markup(self, **kwargs: Any) -> bool:
+        self.edited.append(kwargs)
         return True
 
 
@@ -248,6 +263,8 @@ def test_feedback_button_is_recorded(world) -> None:
     row = asyncio.run(_first(database, models.ShadowFeedback))
     assert row is not None and row.verdict == "ok"
     assert bot.answered == ["callback-1"]
+    assert bot.edited[-1]["reply_markup"] is None
+    assert "Обработано" in bot.edited[-1]["text"]
 
 
 def test_owner_control_command_is_handled(world) -> None:

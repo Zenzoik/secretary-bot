@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from secretary_bot.callbacks import finalize_callback
 from secretary_bot.storage import (
     ConnectionRecord,
     ContactCardRecord,
@@ -101,7 +102,8 @@ class ControlPlane:
                     session, connection, action=live_action, now=moment
                 )
 
-        await self.bot.answer_callback_query(query.id, text="Готово")
+        note, toast = _callback_feedback(contact, live_action)
+        await finalize_callback(self.bot, query, note=note, toast=toast)
         if response is not None and connection.owner_chat_id is not None:
             kwargs: dict[str, Any] = {
                 "chat_id": connection.owner_chat_id,
@@ -284,6 +286,26 @@ def _parse_live_callback(data: str | None) -> str | None:
     if len(parts) != 2 or parts[0] != "live" or parts[1] not in {"confirm", "cancel"}:
         return None
     return parts[1]
+
+
+def _callback_feedback(
+    contact: tuple[int, str, str | None] | None, live_action: str | None
+) -> tuple[str, str]:
+    if live_action == "confirm":
+        return "✅ Обработано: live включён", "Live включён"
+    if live_action == "cancel":
+        return "✅ Обработано: dry-run сохранён", "Отменено"
+    assert contact is not None
+    _, action, argument = contact
+    if action == "exclude":
+        return "✅ Обработано: контакт исключён навсегда", "Контакт исключён"
+    if action == "today":
+        return "✅ Обработано: контакт не трогаем сегодня", "Исключён до полуночи"
+    if action == "templates":
+        return "✅ Обработано: выбор персонального шаблона", "Выберите шаблон"
+    if action == "template":
+        return f"✅ Обработано: выбран шаблон {argument}", "Шаблон выбран"
+    return "✅ Обработано: без изменений", "Без изменений"
 
 
 def _render_status(connection: ConnectionRecord, *, now: datetime) -> str:

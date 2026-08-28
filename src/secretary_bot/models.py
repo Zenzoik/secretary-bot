@@ -235,6 +235,7 @@ class ShadowFeedback(Base):
     __tablename__ = "shadow_feedback"
     __table_args__ = (
         CheckConstraint("verdict IN ('ok', 'wrong', 'exclude')", name="verdict_values"),
+        UniqueConstraint("log_id"),
     )
 
     id: Mapped[int] = mapped_column(SURROGATE_KEY, primary_key=True, autoincrement=True)
