@@ -11,6 +11,7 @@ from secretary_bot.actions import LogAction
 from secretary_bot.control import (
     BUTTON_BACK,
     BUTTON_CANCEL,
+    BUTTON_INVITE,
     BUTTON_LIVE,
     BUTTON_LIVE_CONFIRM,
     BUTTON_MUTE,
@@ -18,13 +19,18 @@ from secretary_bot.control import (
     BUTTON_ON,
     BUTTON_STATUS,
     BUTTON_TODAY,
+    BUTTON_USERS,
     ControlPlane,
 )
 from secretary_bot.gate import ContactState, GateDecision, evaluate_gate
 from secretary_bot.storage import (
     ConnectionSnapshot,
     Database,
+    approve_access_user,
+    consume_access_invite,
+    create_access_invite,
     ensure_master,
+    load_access_user,
     load_contact_state,
     load_owner_connection,
     log_decision,
@@ -147,7 +153,79 @@ async def test_start_opens_the_button_control_panel(database: Database) -> None:
         BUTTON_OFF,
         BUTTON_MUTE,
         BUTTON_LIVE,
+        BUTTON_USERS,
+        BUTTON_INVITE,
     ]
+
+
+@pytest.mark.asyncio
+async def test_master_creates_an_invite_and_candidate_becomes_pending(
+    database: Database,
+) -> None:
+    await store_owner(database)
+    bot = FakeBot()
+    control = ControlPlane(database, bot, bot_username="secretary_test_bot")
+
+    assert await control.handle_message(owner_message(BUTTON_INVITE), now=NOW)
+    link = bot.sent[-1]["text"].splitlines()[-1]
+    assert link.startswith("https://t.me/secretary_test_bot?start=invite_")
+    token = link.rsplit("invite_", 1)[1]
+
+    assert await control.handle_message(
+        owner_message(f"/start invite_{token}", owner_id=99, chat_id=99), now=NOW
+    )
+    async with database.session() as session:
+        candidate = await load_access_user(session, 99)
+        assert candidate is not None
+        assert candidate.status == "pending"
+        assert candidate.username is None
+    assert "Дождитесь подтверждения" in bot.sent[-2]["text"]
+    assert "новый запрос" in bot.sent[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_master_approves_and_revokes_a_pending_candidate(database: Database) -> None:
+    await store_owner(database)
+    async with database.session() as session, session.begin():
+        token = await create_access_invite(session, created_by=42, now=NOW, ttl=timedelta(hours=1))
+        await consume_access_invite(session, token=token, user_id=99, username="customer", now=NOW)
+    bot = FakeBot()
+    control = ControlPlane(database, bot, bot_username="secretary_test_bot")
+
+    assert await control.handle_message(owner_message(BUTTON_USERS), now=NOW)
+    callbacks = [
+        button.callback_data
+        for row in bot.sent[-1]["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    assert callbacks == ["access:approve:99", "access:revoke:99"]
+
+    assert await control.handle_callback(owner_callback("access:approve:99"), now=NOW)
+    async with database.session() as session:
+        candidate = await load_access_user(session, 99)
+        assert candidate is not None and candidate.status == "active"
+    assert bot.edited[-1]["reply_markup"] is None
+    assert "Доступ подтверждён" in bot.sent[-1]["text"]
+
+    assert await control.handle_callback(owner_callback("access:revoke:99"), now=NOW)
+    async with database.session() as session:
+        candidate = await load_access_user(session, 99)
+        assert candidate is not None and candidate.status == "revoked"
+
+
+@pytest.mark.asyncio
+async def test_non_master_cannot_use_access_callbacks(database: Database) -> None:
+    await store_owner(database)
+    async with database.session() as session, session.begin():
+        token = await create_access_invite(session, created_by=42, now=NOW, ttl=timedelta(hours=1))
+        await consume_access_invite(session, token=token, user_id=99, username=None, now=NOW)
+        await approve_access_user(session, user_id=99, approved_by=42, now=NOW)
+    bot = FakeBot()
+
+    assert not await ControlPlane(database, bot).handle_callback(
+        owner_callback("access:revoke:42", owner_id=99), now=NOW
+    )
+    assert bot.sent == []
 
 
 @pytest.mark.asyncio

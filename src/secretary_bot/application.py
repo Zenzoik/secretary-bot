@@ -72,7 +72,11 @@ def create_app(
     state = RuntimeState(
         bot=telegram_bot,
         pipeline=pipeline,
-        control=ControlPlane(database=connection_database, bot=telegram_bot),
+        control=ControlPlane(
+            database=connection_database,
+            bot=telegram_bot,
+            bot_username=settings.bot_username,
+        ),
         queue_size=settings.update_queue_size,
         allowed_chat_ids=settings.allowed_chat_ids,
     )

@@ -184,6 +184,10 @@ async def consume_access_invite(
         session.add(row)
     if row.role == "master":
         return _access_record(row)
+    if row.status == "active":
+        row.username = username or row.username
+        await session.flush()
+        return _access_record(row)
     row.username = username
     row.role = "user"
     row.status = "pending"
