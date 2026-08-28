@@ -32,8 +32,18 @@ def upgrade() -> None:
         sa.Column("invited_by", sa.BigInteger(), nullable=True),
         sa.Column("approved_by", sa.BigInteger(), nullable=True),
         sa.Column("revoked_by", sa.BigInteger(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-        sa.Column("status_changed_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "status_changed_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.CheckConstraint(
             "onboarding_state IN ('awaiting_connection', 'timezone', 'schedule', 'scope', 'ready')",
             name=op.f("ck_access_users_onboarding_state_values"),
@@ -54,7 +64,12 @@ def upgrade() -> None:
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("consumed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("consumed_by", sa.BigInteger(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(
             ["created_by"],
             ["access_users.user_id"],
