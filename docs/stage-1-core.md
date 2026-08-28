@@ -50,6 +50,7 @@
 
 ## Что осталось проверить руками
 
+- Пошаговый безопасный сценарий: [`stage-1-live-checklist.md`](stage-1-live-checklist.md).
 - Деплой стека на VPS (`docker compose up -d --build`) и регистрация webhook.
 - Алерт при `BUSINESS_CONNECTION_INVALID` — воспроизводится разрывом соединения
   в настройках Telegram (Этап 2).
