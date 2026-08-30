@@ -70,6 +70,22 @@ class Connection(Base):
             "control_state IN ('main', 'mute_hours', 'live_confirm')",
             name="control_state_values",
         ),
+        CheckConstraint(
+            "sender_identity IN ('bot', 'owner')",
+            name="sender_identity_values",
+        ),
+        CheckConstraint(
+            "delay_min_seconds BETWEEN 0 AND 3600",
+            name="delay_min_seconds_range",
+        ),
+        CheckConstraint(
+            "delay_max_seconds BETWEEN delay_min_seconds AND 3600",
+            name="delay_max_seconds_range",
+        ),
+        CheckConstraint(
+            "bot_delay_seconds BETWEEN 1 AND 60",
+            name="bot_delay_seconds_range",
+        ),
     )
 
     id: Mapped[int] = mapped_column(SURROGATE_KEY, primary_key=True, autoincrement=True)
@@ -82,6 +98,11 @@ class Connection(Base):
     )
     is_active: Mapped[bool] = mapped_column(Boolean, server_default=sql_text("true"))
     dry_run: Mapped[bool] = mapped_column(Boolean, server_default=sql_text("true"))
+    sender_identity: Mapped[str] = mapped_column(Text, server_default=sql_text("'bot'"))
+    delay_min_seconds: Mapped[int] = mapped_column(SmallInteger, server_default=sql_text("10"))
+    delay_max_seconds: Mapped[int] = mapped_column(SmallInteger, server_default=sql_text("60"))
+    bot_delay_seconds: Mapped[int] = mapped_column(SmallInteger, server_default=sql_text("5"))
+    mark_read: Mapped[bool] = mapped_column(Boolean, server_default=sql_text("false"))
     kill_switch: Mapped[bool] = mapped_column(Boolean, server_default=sql_text("false"))
     muted_until: Mapped[datetime | None] = mapped_column(UtcDateTime())
     live_confirmation_until: Mapped[datetime | None] = mapped_column(UtcDateTime())

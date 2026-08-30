@@ -43,6 +43,11 @@ class ConnectionRecord:
     owner_chat_id: int | None
     rights: dict[str, Any]
     dry_run: bool
+    sender_identity: str
+    delay_min_seconds: int
+    delay_max_seconds: int
+    bot_delay_seconds: int
+    mark_read: bool
     control_state: str
     policy: ConnectionPolicy
 
@@ -396,6 +401,33 @@ async def set_connection_control(
         raise LookupError("connection not found")
     row.kill_switch = kill_switch
     row.muted_until = muted_until
+    await session.flush()
+
+
+async def set_delivery_preferences(
+    session: AsyncSession,
+    connection_id: int,
+    *,
+    sender_identity: str,
+    delay_min_seconds: int,
+    delay_max_seconds: int,
+    bot_delay_seconds: int,
+    mark_read: bool,
+) -> None:
+    if sender_identity not in {"bot", "owner"}:
+        raise ValueError("sender_identity must be bot or owner")
+    if not 0 <= delay_min_seconds <= delay_max_seconds <= 3600:
+        raise ValueError("owner delay must satisfy 0 <= min <= max <= 3600")
+    if not 1 <= bot_delay_seconds <= 60:
+        raise ValueError("bot delay must be between 1 and 60 seconds")
+    row = await session.get(models.Connection, connection_id)
+    if row is None:
+        raise LookupError("connection not found")
+    row.sender_identity = sender_identity
+    row.delay_min_seconds = delay_min_seconds
+    row.delay_max_seconds = delay_max_seconds
+    row.bot_delay_seconds = bot_delay_seconds
+    row.mark_read = mark_read
     await session.flush()
 
 
@@ -824,6 +856,11 @@ async def _record(session: AsyncSession, row: models.Connection) -> ConnectionRe
         owner_chat_id=row.owner_chat_id,
         rights=dict(row.rights_json or {}),
         dry_run=row.dry_run,
+        sender_identity=row.sender_identity,
+        delay_min_seconds=row.delay_min_seconds,
+        delay_max_seconds=row.delay_max_seconds,
+        bot_delay_seconds=row.bot_delay_seconds,
+        mark_read=row.mark_read,
         control_state=row.control_state,
         policy=ConnectionPolicy(
             timezone=row.timezone,

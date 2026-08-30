@@ -37,6 +37,7 @@ from secretary_bot.storage import (
     set_contact_exclusion,
     set_contact_template_override,
     set_control_state,
+    set_delivery_preferences,
     upsert_connection,
 )
 
@@ -241,9 +242,56 @@ async def test_connection_is_created_then_refreshed(session: AsyncSession) -> No
     assert refreshed.id == created.id
     assert refreshed.policy.is_active is False
     assert refreshed.dry_run is True, "a fresh connection must start in dry run"
+    assert refreshed.sender_identity == "bot"
+    assert refreshed.delay_min_seconds == 10
+    assert refreshed.delay_max_seconds == 60
+    assert refreshed.bot_delay_seconds == 5
+    assert refreshed.mark_read is False
     assert refreshed.control_state == "main"
     # A connection update without user_chat_id must not erase the known one.
     assert refreshed.owner_chat_id == 42
+
+
+@pytest.mark.asyncio
+async def test_delivery_preferences_are_owner_scoped_and_validated(
+    session: AsyncSession,
+) -> None:
+    first = await upsert_connection(session, SNAPSHOT)
+    await upsert_connection(
+        session, ConnectionSnapshot("connection-2", owner_user_id=99, owner_chat_id=99)
+    )
+
+    await set_delivery_preferences(
+        session,
+        first.id,
+        sender_identity="owner",
+        delay_min_seconds=12,
+        delay_max_seconds=34,
+        bot_delay_seconds=3,
+        mark_read=True,
+    )
+
+    changed = await load_connection(session, "connection-1")
+    untouched = await load_connection(session, "connection-2")
+    assert changed is not None
+    assert changed.sender_identity == "owner"
+    assert (changed.delay_min_seconds, changed.delay_max_seconds) == (12, 34)
+    assert changed.bot_delay_seconds == 3
+    assert changed.mark_read is True
+    assert untouched is not None
+    assert untouched.sender_identity == "bot"
+    assert untouched.mark_read is False
+
+    with pytest.raises(ValueError, match="min <= max"):
+        await set_delivery_preferences(
+            session,
+            first.id,
+            sender_identity="owner",
+            delay_min_seconds=60,
+            delay_max_seconds=10,
+            bot_delay_seconds=5,
+            mark_read=False,
+        )
 
 
 @pytest.mark.asyncio
