@@ -297,7 +297,7 @@ def test_approved_owner_connection_starts_safe_onboarding(world) -> None:
     assert connection.owner_user_id == 99
     assert connection.kill_switch is True
     assert asyncio.run(_first(database, models.MessageLog)) is None
-    assert "часовой пояс" in bot.sent[-1]["text"]
+    assert "часовий пояс" in bot.sent[-1]["text"]
 
 
 @pytest.mark.parametrize(
@@ -433,7 +433,7 @@ def test_feedback_button_is_recorded(world) -> None:
     assert row is not None and row.verdict == "ok"
     assert bot.answered == ["callback-1"]
     assert bot.edited[-1]["reply_markup"] is None
-    assert "Обработано" in bot.edited[-1]["text"]
+    assert "Оброблено" in bot.edited[-1]["text"]
 
 
 def test_owner_control_command_is_handled(world) -> None:
@@ -445,7 +445,7 @@ def test_owner_control_command_is_handled(world) -> None:
         wait_for(lambda: client.app.state.runtime.processed_updates == 2)
 
     assert len(bot.sent) == 1
-    assert "Секретарь: включён" in bot.sent[0]["text"]
+    assert "Секретар: увімкнено" in bot.sent[0]["text"]
 
 
 def test_contact_card_callback_is_routed_before_feedback(world) -> None:

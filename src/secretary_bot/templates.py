@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from enum import StrEnum
 
 from secretary_bot.classifier import Category
+from secretary_bot.texts import MONEY_PRIORITY_TEMPLATE, OFF_HOURS_TEMPLATE
 
 
 class TemplateCode(StrEnum):
@@ -14,10 +15,8 @@ class TemplateCode(StrEnum):
 # FR-5. The contact sees an ordinary message from the owner, so the wording has
 # to be true: one message, no promises the owner has not made.
 DEFAULT_TEMPLATES: Mapping[TemplateCode, str] = {
-    TemplateCode.OFF_HOURS_DEFAULT: "Сейчас нерабочее время, отвечу позже",
-    TemplateCode.MONEY_PRIORITY: (
-        "Сейчас нерабочее время. Вопрос по оплате увидел, отвечу первым делом утром."
-    ),
+    TemplateCode.OFF_HOURS_DEFAULT: OFF_HOURS_TEMPLATE,
+    TemplateCode.MONEY_PRIORITY: MONEY_PRIORITY_TEMPLATE,
 }
 
 

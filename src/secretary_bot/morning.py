@@ -13,6 +13,7 @@ from secretary_bot.storage import (
     mark_morning_delivered,
     pending_morning,
 )
+from secretary_bot.texts import render_morning_digest
 
 logger = logging.getLogger(__name__)
 
@@ -63,10 +64,4 @@ def is_delivery_time(local_now: datetime) -> bool:
 
 
 def render_digest(rows: list[MorningQueue], *, timezone: str) -> str:
-    zone = ZoneInfo(timezone)
-    lines = ["☀️ Утром обещали ответить:"]
-    for row in rows:
-        who = row.contact_name or f"id {row.contact_id}"
-        detail = row.summary or "вопрос про деньги"
-        lines.append(f"• {row.occurred_at.astimezone(zone):%H:%M} · {who} — {detail}")
-    return "\n".join(lines)
+    return render_morning_digest(rows, timezone=timezone)

@@ -6,8 +6,10 @@ from typing import Any, Protocol
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from secretary_bot.texts import FEEDBACK_BUTTONS, render_preview
+
 FEEDBACK_PREFIX = "feedback"
-VERDICT_BUTTONS = (("ok", "✅ Норм"), ("wrong", "❌ Не надо было"), ("exclude", "🚫 Исключить"))
+VERDICT_BUTTONS = FEEDBACK_BUTTONS
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,14 +29,13 @@ class Preview:
     confidence: str | None = None
 
     def render(self) -> str:
-        who = self.contact_name or f"id {self.contact_id}"
-        category = self.category
-        if self.confidence is not None:
-            category = f"{category} ({self.confidence})"
-        return (
-            f"🌙 {self.occurred_at:%H:%M} · {who}\n"
-            f"Категория: {category}\n"
-            f"Я бы ответил: «{self.reply_text}»"
+        return render_preview(
+            occurred_at=self.occurred_at,
+            contact_id=self.contact_id,
+            contact_name=self.contact_name,
+            category=self.category,
+            confidence=self.confidence,
+            reply_text=self.reply_text,
         )
 
 

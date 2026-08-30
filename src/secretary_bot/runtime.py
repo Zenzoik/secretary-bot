@@ -26,6 +26,7 @@ from secretary_bot.storage import (
 )
 from secretary_bot.texts import (
     CONNECTION_DISABLED_ALERT,
+    FEEDBACK_RESULTS,
     READ_PERMISSION_LOST_ALERT,
     REPLY_PERMISSION_LOST_ALERT,
 )
@@ -166,12 +167,7 @@ async def _handle_feedback(update: Update, state: RuntimeState) -> None:
             return
         await record_feedback(session, log_id=log_id, verdict=verdict)
     _log(logging.INFO, "shadow_feedback", log_id=log_id, verdict=verdict)
-    labels = {
-        "ok": ("✅ Обработано: оценка «Норм»", "Записал: Норм"),
-        "wrong": ("✅ Обработано: оценка «Не надо было»", "Записал оценку"),
-        "exclude": ("✅ Обработано: кандидат на исключение", "Записал оценку"),
-    }
-    note, toast = labels[verdict]
+    note, toast = FEEDBACK_RESULTS[verdict]
     await finalize_callback(state.bot, query, note=note, toast=toast)
 
 

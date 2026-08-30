@@ -139,7 +139,7 @@ async def test_off_status_and_on_change_the_persistent_gate(database: Database) 
         connection = await load_owner_connection(session, 42)
         assert connection is not None
         assert connection.policy.kill_switch is True
-    assert "выключен" in bot.sent[-1]["text"]
+    assert "вимкнено" in bot.sent[-1]["text"]
     assert BUTTON_ON in keyboard_texts(bot.sent[-1])
     assert BUTTON_OFF not in keyboard_texts(bot.sent[-1])
 
@@ -192,8 +192,8 @@ async def test_master_creates_an_invite_and_candidate_becomes_pending(
         assert candidate is not None
         assert candidate.status == "pending"
         assert candidate.username is None
-    assert "Дождитесь подтверждения" in bot.sent[-2]["text"]
-    assert "новый запрос" in bot.sent[-1]["text"]
+    assert "Дочекайтеся підтвердження" in bot.sent[-2]["text"]
+    assert "новий запит" in bot.sent[-1]["text"]
 
 
 @pytest.mark.asyncio
@@ -223,7 +223,7 @@ async def test_master_approves_and_revokes_a_pending_candidate(database: Databas
         candidate = await load_access_user(session, 99)
         assert candidate is not None and candidate.status == "active"
     assert bot.edited[-1]["reply_markup"] is None
-    assert "Доступ подтверждён" in bot.sent[-1]["text"]
+    assert "Доступ підтверджено" in bot.sent[-1]["text"]
 
     queue = RecordingQueue()
     control.delayed_queue = queue  # type: ignore[assignment]
@@ -286,7 +286,7 @@ async def test_onboarding_fsm_persists_and_finishes_in_safe_dry_run(
     assert set(keyboard_texts(bot.sent[-1])) == {*SCHEDULE_BUTTONS, BUTTON_BACK}
 
     assert await ControlPlane(database, bot).handle_message(
-        owner_message("🧪 Тестовый 24/7", owner_id=99, chat_id=99), now=NOW
+        owner_message("🧪 Тестовий 24/7", owner_id=99, chat_id=99), now=NOW
     )
     assert keyboard_texts(bot.sent[-1]) == [BUTTON_SCOPE_CONFIRMED, BUTTON_BACK]
 
@@ -316,7 +316,7 @@ async def test_onboarding_refuses_missing_business_rights(database: Database) ->
     async with database.session() as session:
         access = await load_access_user(session, 99)
         assert access is not None and access.onboarding_state == "awaiting_connection"
-    assert "ответы" in bot.sent[-1]["text"]
+    assert "відповіді" in bot.sent[-1]["text"]
 
 
 @pytest.mark.asyncio
@@ -391,7 +391,7 @@ async def test_invalid_mute_does_not_change_state(database: Database) -> None:
     async with database.session() as session:
         connection = await load_owner_connection(session, 42)
         assert connection is not None and connection.policy.muted_until is None
-    assert "Выберите кнопку" in bot.sent[-1]["text"]
+    assert "Виберіть кнопку" in bot.sent[-1]["text"]
 
 
 @pytest.mark.asyncio
@@ -400,12 +400,18 @@ async def test_mute_keyboard_state_persists_between_handlers(database: Database)
     bot = FakeBot()
 
     assert await ControlPlane(database, bot).handle_message(owner_message(BUTTON_MUTE), now=NOW)
-    assert keyboard_texts(bot.sent[-1]) == ["1 час", "3 часа", "8 часов", "24 часа", BUTTON_BACK]
+    assert keyboard_texts(bot.sent[-1]) == [
+        "1 година",
+        "3 години",
+        "8 годин",
+        "24 години",
+        BUTTON_BACK,
+    ]
     async with database.session() as session:
         connection = await load_owner_connection(session, 42)
         assert connection is not None and connection.control_state == "mute_hours"
 
-    assert await ControlPlane(database, bot).handle_message(owner_message("3 часа"), now=NOW)
+    assert await ControlPlane(database, bot).handle_message(owner_message("3 години"), now=NOW)
     async with database.session() as session:
         connection = await load_owner_connection(session, 42)
         assert connection is not None
@@ -419,7 +425,7 @@ async def test_mute_duration_is_not_a_command_in_the_main_state(database: Databa
     await store_owner(database)
     bot = FakeBot()
 
-    assert not await ControlPlane(database, bot).handle_message(owner_message("3 часа"), now=NOW)
+    assert not await ControlPlane(database, bot).handle_message(owner_message("3 години"), now=NOW)
     assert bot.sent == []
 
 
@@ -503,7 +509,7 @@ async def test_contact_card_can_exclude_forever(database: Database) -> None:
             GateDecision.SKIPPED_EXCLUDED
         )
     assert bot.edited[-1]["reply_markup"] is None
-    assert "исключён навсегда" in bot.edited[-1]["text"]
+    assert "виключено назавжди" in bot.edited[-1]["text"]
 
 
 @pytest.mark.asyncio
@@ -528,7 +534,7 @@ async def test_contact_card_can_force_a_template(database: Database) -> None:
     control = ControlPlane(database, bot)
 
     assert await control.handle_callback(owner_callback("contact:100:templates"), now=NOW)
-    assert "Выберите шаблон" in bot.sent[-1]["text"]
+    assert "Виберіть шаблон" in bot.sent[-1]["text"]
     assert await control.handle_callback(
         owner_callback("contact:100:template:money_priority"), now=NOW
     )
@@ -589,7 +595,7 @@ async def test_expired_live_confirmation_keeps_dry_run(database: Database) -> No
     async with database.session() as session:
         connection = await load_owner_connection(session, 42)
         assert connection is not None and connection.dry_run is True
-    assert "истекло" in bot.sent[-1]["text"]
+    assert "протерміновано" in bot.sent[-1]["text"]
 
 
 @pytest.mark.asyncio
