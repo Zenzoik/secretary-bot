@@ -84,6 +84,7 @@ def test_task_round_trips_without_the_message_body() -> None:
         "confidence",
         "window_key",
         "contact_name",
+        "delivery_attempts",
     }
     assert TASK.incoming_moment == NOW
 
@@ -91,8 +92,11 @@ def test_task_round_trips_without_the_message_body() -> None:
 def test_legacy_task_keeps_the_preference_used_before_stage_1_7() -> None:
     values = json.loads(TASK.to_json())
     values.pop("sender_identity")
+    values.pop("delivery_attempts")
 
-    assert ReplyTask.from_json(json.dumps(values)).sender_identity == "owner"
+    restored = ReplyTask.from_json(json.dumps(values))
+    assert restored.sender_identity == "owner"
+    assert restored.delivery_attempts == 0
 
 
 def test_delay_uses_connection_specific_bounds() -> None:
