@@ -114,6 +114,7 @@ OFF_HOURS_TEMPLATE = "Зараз неробочий час, відповім п�
 MONEY_PRIORITY_TEMPLATE = (
     "Зараз неробочий час. Питання щодо оплати побачив, відповім насамперед уранці."
 )
+BOT_IDENTITY_SUFFIX = "— 🤖 Секретар"
 
 CONNECTION_DISABLED_ALERT = (
     "⚠️ Telegram Business відключено. Чергу відповідей очищено, автовідповіді зупинено."
@@ -129,6 +130,13 @@ CONNECTION_LOST_ALERT = (
     "⚠️ Telegram відхилив відправлення: з'єднання недійсне. "
     "Чергу відповідей очищено, автовідповіді зупинено."
 )
+
+
+def as_bot_reply(text: str) -> str:
+    """Add attribution that is visible in every Telegram client."""
+    return f"{text}\n\n{BOT_IDENTITY_SUFFIX}"
+
+
 def missing_rights(rights: list[str]) -> str:
     return (
         "Бракує прав Telegram: "

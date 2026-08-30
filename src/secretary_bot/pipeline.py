@@ -36,7 +36,7 @@ from secretary_bot.storage import (
     record_owner_reply,
 )
 from secretary_bot.templates import TemplateCode, render, template_for
-from secretary_bot.texts import CONNECTION_LOST_ALERT
+from secretary_bot.texts import CONNECTION_LOST_ALERT, as_bot_reply
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +184,8 @@ class Pipeline:
             overrides = await load_templates(session, connection.id)
 
         text = render(TemplateCode(task.template_code), overrides=overrides)
+        if task.sender_identity == "bot":
+            text = as_bot_reply(text)
         if connection.dry_run:
             return await self._preview(connection, task, text, at=moment)
         return await self._send(connection, task, text, at=moment)

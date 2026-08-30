@@ -36,6 +36,10 @@ def test_shipped_templates_and_controls_are_ukrainian() -> None:
     assert "вимкнено" in texts.SECRETARY_OFF
 
 
+def test_bot_reply_has_a_cross_client_identity_suffix() -> None:
+    assert texts.as_bot_reply("Текст") == "Текст\n\n— 🤖 Секретар"
+
+
 def test_text_catalog_contains_no_russian_only_letters() -> None:
     source = (SOURCE_ROOT / "texts.py").read_text()
 
