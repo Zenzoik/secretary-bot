@@ -69,6 +69,7 @@ def test_critical_domain_checks_are_present() -> None:
             "ck_access_users_status_values",
         },
         "connections": {
+            "ck_connections_bot_delay_within_max",
             "ck_connections_bot_delay_seconds_range",
             "ck_connections_control_state_values",
             "ck_connections_delay_max_seconds_range",

@@ -4,7 +4,7 @@ import json
 import logging
 import random
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from secretary_bot.actions import LogAction
 from secretary_bot.classifier import Category, ClassifierSettings, LanguageModel, classify
-from secretary_bot.delayed import DelayedReplyQueue, ReplyTask, reply_delay
+from secretary_bot.delayed import MAX_DELAY_SECONDS, DelayedReplyQueue, ReplyTask, reply_delay
 from secretary_bot.gate import GateDecision, evaluate_gate
 from secretary_bot.hard_filter import HardFilterResult
 from secretary_bot.notifications import OwnerNotifier, Preview
@@ -137,7 +137,11 @@ class Pipeline:
             contact_name=incoming.contact_name,
         )
         if connection.sender_identity == "bot":
-            delay = timedelta(seconds=connection.bot_delay_seconds)
+            delay = reply_delay(
+                min_seconds=connection.bot_delay_seconds,
+                max_seconds=min(connection.delay_max_seconds, MAX_DELAY_SECONDS),
+                rng=self.rng,
+            )
         else:
             delay = reply_delay(
                 min_seconds=connection.delay_min_seconds,

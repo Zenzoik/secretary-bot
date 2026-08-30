@@ -431,8 +431,8 @@ async def set_delivery_preferences(
         raise ValueError("sender_identity must be bot or owner")
     if not 0 <= delay_min_seconds <= delay_max_seconds <= 3600:
         raise ValueError("owner delay must satisfy 0 <= min <= max <= 3600")
-    if not 1 <= bot_delay_seconds <= 60:
-        raise ValueError("bot delay must be between 1 and 60 seconds")
+    if not 1 <= bot_delay_seconds <= min(delay_max_seconds, 60):
+        raise ValueError("bot delay minimum must be between 1 and the delay maximum")
     row = await session.get(models.Connection, connection_id)
     if row is None:
         raise LookupError("connection not found")

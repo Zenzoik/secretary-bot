@@ -293,6 +293,17 @@ async def test_delivery_preferences_are_owner_scoped_and_validated(
             mark_read=False,
         )
 
+    with pytest.raises(ValueError, match="delay maximum"):
+        await set_delivery_preferences(
+            session,
+            first.id,
+            sender_identity="bot",
+            delay_min_seconds=10,
+            delay_max_seconds=30,
+            bot_delay_seconds=31,
+            mark_read=False,
+        )
+
 
 @pytest.mark.asyncio
 async def test_unknown_connection_reads_as_missing(session: AsyncSession) -> None:

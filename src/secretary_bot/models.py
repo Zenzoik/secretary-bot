@@ -86,6 +86,10 @@ class Connection(Base):
             "bot_delay_seconds BETWEEN 1 AND 60",
             name="bot_delay_seconds_range",
         ),
+        CheckConstraint(
+            "bot_delay_seconds <= delay_max_seconds",
+            name="bot_delay_within_max",
+        ),
     )
 
     id: Mapped[int] = mapped_column(SURROGATE_KEY, primary_key=True, autoincrement=True)

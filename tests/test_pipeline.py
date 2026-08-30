@@ -417,14 +417,20 @@ async def test_owner_identity_uses_configured_delay_and_no_prefix(world) -> None
 
 
 @pytest.mark.asyncio
-async def test_bot_identity_uses_the_technical_delay(world) -> None:
+async def test_bot_identity_uses_a_random_5_to_60_second_delay(world) -> None:
     pipeline, _, _, database = world
-    await set_connection(database, sender_identity="bot", bot_delay_seconds=5)
+    await set_connection(
+        database,
+        sender_identity="bot",
+        bot_delay_seconds=5,
+        delay_max_seconds=60,
+    )
 
     await pipeline.process_incoming(message())
 
     assert await pipeline.queue.pop_due(now=NIGHT + timedelta(seconds=4)) == []
-    task = (await pipeline.queue.pop_due(now=NIGHT + timedelta(seconds=5)))[0]
+    assert await pipeline.queue.pop_due(now=NIGHT + timedelta(seconds=5)) == []
+    task = (await pipeline.queue.pop_due(now=NIGHT + timedelta(seconds=60)))[0]
     assert task.sender_identity == "bot"
 
 
