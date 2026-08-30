@@ -26,6 +26,7 @@ TASK = ReplyTask(
     template_code="money_priority",
     category="money",
     incoming_at=NOW.isoformat(),
+    sender_identity="owner",
     confidence="0.91",
     window_key="2026-08-23:1",
     contact_name="Вася",
@@ -79,11 +80,31 @@ def test_task_round_trips_without_the_message_body() -> None:
         "template_code",
         "category",
         "incoming_at",
+        "sender_identity",
         "confidence",
         "window_key",
         "contact_name",
     }
     assert TASK.incoming_moment == NOW
+
+
+def test_legacy_task_keeps_the_preference_used_before_stage_1_7() -> None:
+    values = json.loads(TASK.to_json())
+    values.pop("sender_identity")
+
+    assert ReplyTask.from_json(json.dumps(values)).sender_identity == "owner"
+
+
+def test_delay_uses_connection_specific_bounds() -> None:
+    delay = reply_delay(min_seconds=17, max_seconds=17, rng=random.Random(0))
+
+    assert delay == timedelta(seconds=17)
+
+
+@pytest.mark.parametrize("bounds", [(-1, 5), (10, 5)])
+def test_invalid_delay_bounds_are_rejected(bounds: tuple[int, int]) -> None:
+    with pytest.raises(ValueError, match="0 <= min <= max"):
+        reply_delay(min_seconds=bounds[0], max_seconds=bounds[1])
 
 
 @pytest.mark.asyncio

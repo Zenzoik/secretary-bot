@@ -14,7 +14,7 @@ from sqlalchemy import select
 from secretary_bot import models
 from secretary_bot.application import create_app
 from secretary_bot.config import Settings
-from secretary_bot.delayed import DelayedReplyQueue
+from secretary_bot.delayed import DelayedReplyQueue, ReplyTask
 from secretary_bot.ingest import DeduplicationUnavailable
 from secretary_bot.storage import (
     Database,
@@ -90,7 +90,7 @@ CUSTOMER_CONNECTION_UPDATE = {
         "user": {"id": 99, "is_bot": False, "first_name": "Customer"},
         "user_chat_id": 99,
         "date": 1_700_000_000,
-        "rights": {"can_reply": True, "can_read_messages": True},
+        "rights": {"can_reply": True},
         "is_enabled": True,
     },
 }
@@ -117,6 +117,7 @@ class FakeBot:
         self.sent: list[dict[str, Any]] = []
         self.answered: list[str] = []
         self.edited: list[dict[str, Any]] = []
+        self.read: list[dict[str, Any]] = []
         self.connections: dict[str, BusinessConnection] = {}
 
     async def get_business_connection(self, connection_id: str) -> BusinessConnection:
@@ -125,6 +126,10 @@ class FakeBot:
     async def send_message(self, **kwargs: Any) -> SentMessage:
         self.sent.append(kwargs)
         return SentMessage()
+
+    async def read_business_message(self, **kwargs: Any) -> bool:
+        self.read.append(kwargs)
+        return True
 
     async def answer_callback_query(self, callback_query_id: str, **kwargs: Any) -> bool:
         self.answered.append(callback_query_id)
@@ -181,6 +186,7 @@ def world(database: Database):
         delayed_queue=queue,
         notifier=notifier,
     )
+    app.state.test_notifier = notifier
     return TestClient(app), bot, queue, database
 
 
@@ -292,6 +298,100 @@ def test_approved_owner_connection_starts_safe_onboarding(world) -> None:
     assert connection.kill_switch is True
     assert asyncio.run(_first(database, models.MessageLog)) is None
     assert "часовой пояс" in bot.sent[-1]["text"]
+
+
+@pytest.mark.parametrize(
+    ("business_connection", "alert_fragment"),
+    [
+        (
+            {**CONNECTION_UPDATE["business_connection"], "is_enabled": False},
+            "Telegram Business",
+        ),
+        (
+            {
+                **CONNECTION_UPDATE["business_connection"],
+                "rights": {"can_read_messages": True},
+            },
+            "права відповідати",
+        ),
+    ],
+)
+def test_connection_or_reply_permission_loss_fails_closed(
+    world, business_connection: dict[str, Any], alert_fragment: str
+) -> None:
+    client, _, queue, database = world
+    pending = ReplyTask(
+        connection_id=1,
+        business_connection_id="connection-1",
+        contact_id=100,
+        chat_id=100,
+        message_id=10,
+        template_code="off_hours_default",
+        category="general",
+        incoming_at=datetime.now(UTC).isoformat(),
+        sender_identity="bot",
+    )
+
+    with client:
+        assert post_update(client, CONNECTION_UPDATE).status_code == 200
+        wait_for(lambda: client.app.state.runtime.processed_updates == 1)
+        asyncio.run(queue.schedule(pending, due_at=datetime.now(UTC) + timedelta(hours=1)))
+        revoked = {
+            "update_id": 30,
+            "business_connection": business_connection,
+        }
+        assert post_update(client, revoked).status_code == 200
+        wait_for(lambda: client.app.state.runtime.processed_updates == 2)
+
+    connection = asyncio.run(_first(database, models.Connection))
+    assert connection is not None
+    assert connection.is_active is False
+    assert connection.kill_switch is True
+    assert asyncio.run(queue.pending()) == 0
+    assert alert_fragment in client.app.state.test_notifier.alerts[-1][1]
+
+
+def test_read_permission_loss_does_not_stop_replies(world) -> None:
+    client, _, queue, database = world
+    readable = {
+        **CONNECTION_UPDATE,
+        "business_connection": {
+            **CONNECTION_UPDATE["business_connection"],
+            "rights": {"can_reply": True, "can_read_messages": True},
+        },
+    }
+
+    with client:
+        assert post_update(client, readable).status_code == 200
+        wait_for(lambda: client.app.state.runtime.processed_updates == 1)
+        asyncio.run(_enable_mark_read(database))
+        pending = ReplyTask(
+            connection_id=1,
+            business_connection_id="connection-1",
+            contact_id=100,
+            chat_id=100,
+            message_id=10,
+            template_code="off_hours_default",
+            category="general",
+            incoming_at=datetime.now(UTC).isoformat(),
+        )
+        asyncio.run(queue.schedule(pending, due_at=datetime.now(UTC) + timedelta(hours=1)))
+        no_read = {
+            "update_id": 31,
+            "business_connection": {
+                **CONNECTION_UPDATE["business_connection"],
+                "rights": {"can_reply": True},
+            },
+        }
+        assert post_update(client, no_read).status_code == 200
+        wait_for(lambda: client.app.state.runtime.processed_updates == 2)
+
+    connection = asyncio.run(_first(database, models.Connection))
+    assert connection is not None
+    assert connection.is_active is True
+    assert connection.kill_switch is False
+    assert asyncio.run(queue.pending()) == 1
+    assert "позначати повідомлення" in client.app.state.test_notifier.alerts[-1][1]
 
 
 def test_incoming_message_is_gated_and_never_echoed(world) -> None:
@@ -430,3 +530,10 @@ async def _approve_customer(database: Database) -> None:
             approved_by=42,
             now=datetime.fromtimestamp(1_700_000_000, tz=UTC),
         )
+
+
+async def _enable_mark_read(database: Database) -> None:
+    async with database.session() as session, session.begin():
+        row = await session.scalar(select(models.Connection))
+        assert row is not None
+        row.mark_read = True

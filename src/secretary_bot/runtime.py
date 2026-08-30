@@ -16,11 +16,18 @@ from secretary_bot.notifications import parse_feedback
 from secretary_bot.pipeline import IncomingMessage, Pipeline
 from secretary_bot.storage import (
     ConnectionSnapshot,
+    deactivate_connection,
     feedback_belongs_to_owner,
     load_access_user,
+    load_connection,
     record_feedback,
     set_connection_control,
     upsert_connection,
+)
+from secretary_bot.texts import (
+    CONNECTION_DISABLED_ALERT,
+    READ_PERMISSION_LOST_ALERT,
+    REPLY_PERMISSION_LOST_ALERT,
 )
 
 logger = logging.getLogger(__name__)
@@ -30,6 +37,8 @@ class TelegramBot(Protocol):
     async def get_business_connection(self, business_connection_id: str) -> BusinessConnection: ...
 
     async def send_message(self, **kwargs: Any) -> Any: ...
+
+    async def read_business_message(self, **kwargs: Any) -> Any: ...
 
     async def answer_callback_query(self, callback_query_id: str, **kwargs: Any) -> Any: ...
 
@@ -184,6 +193,8 @@ async def _store_connection(
     update_id: int,
     source: str = "update",
 ) -> bool:
+    cancel_connection_id: int | None = None
+    alert: tuple[int, str] | None = None
     async with state.pipeline.database.session() as session, session.begin():
         access = await load_access_user(session, connection.user.id)
         if access is None or not access.can_connect:
@@ -194,6 +205,8 @@ async def _store_connection(
                 source=source,
             )
             return False
+        previous = await load_connection(session, connection.id)
+        rights = connection.rights.model_dump(exclude_none=True) if connection.rights else {}
         record = await upsert_connection(
             session,
             ConnectionSnapshot(
@@ -201,13 +214,34 @@ async def _store_connection(
                 owner_user_id=connection.user.id,
                 owner_chat_id=connection.user_chat_id,
                 owner_username=connection.user.username,
-                rights=connection.rights.model_dump(exclude_none=True) if connection.rights else {},
+                rights=rights,
                 is_enabled=connection.is_enabled,
             ),
         )
         if not access.can_process:
             await set_connection_control(session, record.id, kill_switch=True, muted_until=None)
+        elif not connection.is_enabled:
+            await deactivate_connection(session, record.id)
+            cancel_connection_id = record.id
+            if record.owner_chat_id is not None:
+                alert = (record.owner_chat_id, CONNECTION_DISABLED_ALERT)
+        elif not rights.get("can_reply", False):
+            await deactivate_connection(session, record.id)
+            cancel_connection_id = record.id
+            if record.owner_chat_id is not None:
+                alert = (record.owner_chat_id, REPLY_PERMISSION_LOST_ALERT)
+        elif (
+            record.mark_read
+            and not rights.get("can_read_messages", False)
+            and (previous is None or previous.rights.get("can_read_messages", False))
+            and record.owner_chat_id is not None
+        ):
+            alert = (record.owner_chat_id, READ_PERMISSION_LOST_ALERT)
     state.connections[connection.id] = connection
+    if cancel_connection_id is not None:
+        await state.pipeline.queue.cancel_connection(cancel_connection_id)
+    if alert is not None:
+        await state.pipeline.notifier.alert(*alert)
     _log_connection(connection, update_id=update_id, source=source)
     await state.control.handle_business_connection(connection.user.id, connection.user_chat_id)
     return True

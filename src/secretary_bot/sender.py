@@ -41,6 +41,8 @@ class SendResult:
 class MessageSender(Protocol):
     async def send_message(self, **kwargs: Any) -> Any: ...
 
+    async def read_business_message(self, **kwargs: Any) -> Any: ...
+
 
 @dataclass(slots=True)
 class BusinessReplySender:
@@ -84,6 +86,21 @@ class BusinessReplySender:
                     attempts=attempt,
                 )
         raise AssertionError("unreachable: every attempt either returns or retries")
+
+    async def mark_read(
+        self, *, business_connection_id: str, chat_id: int, message_id: int
+    ) -> bool:
+        """Mark the triggering message read only when the connection allows it."""
+        try:
+            await self.bot.read_business_message(
+                business_connection_id=business_connection_id,
+                chat_id=chat_id,
+                message_id=message_id,
+            )
+        except TelegramAPIError as exc:
+            logger.warning("read_business_message_failed", exc_info=exc)
+            return False
+        return True
 
 
 def _error_code(error: TelegramAPIError) -> str:

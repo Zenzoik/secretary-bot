@@ -4,7 +4,7 @@ import json
 import logging
 import random
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -22,6 +22,7 @@ from secretary_bot.storage import (
     ConnectionRecord,
     Database,
     claim_window,
+    deactivate_connection,
     enqueue_morning,
     load_classifier_settings,
     load_connection,
@@ -35,14 +36,9 @@ from secretary_bot.storage import (
     record_owner_reply,
 )
 from secretary_bot.templates import TemplateCode, render, template_for
+from secretary_bot.texts import CONNECTION_LOST_ALERT, as_bot_reply
 
 logger = logging.getLogger(__name__)
-
-CONNECTION_LOST_ALERT = (
-    "⚠️ Telegram отклонил отправку: соединение недействительно. "
-    "Автоответы остановлены, проверьте подключение бота в настройках."
-)
-
 
 @dataclass(frozen=True, slots=True)
 class IncomingMessage:
@@ -78,6 +74,12 @@ class Pipeline:
             connection = await load_connection(session, incoming.business_connection_id)
             if connection is None:
                 _log(logging.WARNING, "unknown_connection", chat_id=incoming.chat_id)
+                return
+
+            if not connection.rights.get("can_reply", False):
+                await self._log(
+                    session, connection, incoming, LogAction.SKIPPED_INACTIVE
+                )
                 return
 
             if incoming.filter_result is HardFilterResult.OWNER_MESSAGE:
@@ -127,13 +129,22 @@ class Pipeline:
             template_code=forced_template or template_for(classification.category).value,
             category=classification.category.value,
             incoming_at=incoming.received_at.isoformat(),
+            sender_identity=connection.sender_identity,
             confidence=None
             if classification.confidence is None
             else str(classification.confidence),
             window_key=gate.window_key,
             contact_name=incoming.contact_name,
         )
-        due_at = incoming.received_at + reply_delay(rng=self.rng)
+        if connection.sender_identity == "bot":
+            delay = timedelta(seconds=connection.bot_delay_seconds)
+        else:
+            delay = reply_delay(
+                min_seconds=connection.delay_min_seconds,
+                max_seconds=connection.delay_max_seconds,
+                rng=self.rng,
+            )
+        due_at = incoming.received_at + delay
         await self.queue.schedule(task, due_at=due_at)
         _log(
             logging.INFO,
@@ -169,6 +180,8 @@ class Pipeline:
             overrides = await load_templates(session, connection.id)
 
         text = render(TemplateCode(task.template_code), overrides=overrides)
+        if task.sender_identity == "bot":
+            text = as_bot_reply(text)
         if connection.dry_run:
             return await self._preview(connection, task, text, at=moment)
         return await self._send(connection, task, text, at=moment)
@@ -201,7 +214,18 @@ class Pipeline:
                 await self._flag_money(session, connection, task)
 
         if result.outcome is SendOutcome.CONNECTION_INVALID:
+            async with self.database.session() as session, session.begin():
+                await deactivate_connection(session, connection.id)
+            await self.queue.cancel_connection(connection.id)
             await self._alert(connection, CONNECTION_LOST_ALERT)
+        elif result.is_sent and connection.mark_read and connection.rights.get(
+            "can_read_messages", False
+        ):
+            await self.sender.mark_read(
+                business_connection_id=connection.business_connection_id,
+                chat_id=task.chat_id,
+                message_id=task.message_id,
+            )
         return LogAction.REPLIED if result.is_sent else LogAction.ERROR
 
     async def _preview(
@@ -325,7 +349,7 @@ async def _owner_answered(
 
 def _blocked(connection: ConnectionRecord, *, now: datetime) -> LogAction | None:
     """The gate ran before the delay; re-check what may have changed since."""
-    if not connection.policy.is_active:
+    if not connection.policy.is_active or not connection.rights.get("can_reply", False):
         return LogAction.SKIPPED_INACTIVE
     muted_until = connection.policy.muted_until
     if connection.policy.kill_switch or (muted_until is not None and now < muted_until):

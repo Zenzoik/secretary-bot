@@ -976,7 +976,6 @@ def _access_users_keyboard(users: list[AccessUserRecord]) -> InlineKeyboardMarku
 def _missing_onboarding_rights(connection: ConnectionRecord) -> list[str]:
     labels = {
         "can_reply": "ответы",
-        "can_read_messages": "чтение сообщений",
     }
     return [label for key, label in labels.items() if not connection.rights.get(key, False)]
 

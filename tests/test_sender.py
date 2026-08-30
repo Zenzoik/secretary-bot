@@ -23,12 +23,17 @@ class FakeBot:
     def __init__(self, *failures: Exception) -> None:
         self.failures = list(failures)
         self.calls: list[dict[str, Any]] = []
+        self.read_calls: list[dict[str, Any]] = []
 
     async def send_message(self, **kwargs: Any) -> Sent:
         self.calls.append(kwargs)
         if self.failures:
             raise self.failures.pop(0)
         return Sent()
+
+    async def read_business_message(self, **kwargs: Any) -> bool:
+        self.read_calls.append(kwargs)
+        return True
 
 
 def sender(bot: FakeBot) -> tuple[BusinessReplySender, list[float]]:
@@ -138,6 +143,25 @@ async def test_persistent_failure_is_reported_not_raised() -> None:
     assert result.outcome is SendOutcome.FAILED
     assert result.error_code == "TelegramNetworkError"
     assert slept == [2.0, 4.0]
+
+
+@pytest.mark.asyncio
+async def test_triggering_message_can_be_marked_read() -> None:
+    bot = FakeBot()
+    reply_sender, _ = sender(bot)
+
+    marked = await reply_sender.mark_read(
+        business_connection_id="connection-1", chat_id=100, message_id=7
+    )
+
+    assert marked is True
+    assert bot.read_calls == [
+        {
+            "business_connection_id": "connection-1",
+            "chat_id": 100,
+            "message_id": 7,
+        }
+    ]
 
 
 def test_money_and_general_map_to_their_templates() -> None:

@@ -23,6 +23,7 @@ from secretary_bot.storage import (
     upsert_connection,
 )
 from secretary_bot.templates import DEFAULT_TEMPLATES, TemplateCode
+from secretary_bot.texts import BOT_IDENTITY_PREFIX
 from tests.test_delayed import FakeSortedSet
 
 # Monday 03:14 in Kyiv — inside the 22:00–08:00 quiet window.
@@ -34,12 +35,17 @@ class FakeBot:
     def __init__(self, error: Exception | None = None) -> None:
         self.error = error
         self.sent: list[dict[str, Any]] = []
+        self.read: list[dict[str, Any]] = []
 
     async def send_message(self, **kwargs: Any) -> Any:
         self.sent.append(kwargs)
         if self.error is not None:
             raise self.error
         return type("Sent", (), {"message_id": 999})()
+
+    async def read_business_message(self, **kwargs: Any) -> bool:
+        self.read.append(kwargs)
+        return True
 
 
 class FakeNotifier:
@@ -143,7 +149,9 @@ async def test_night_message_is_scheduled_once_and_answered_once(world) -> None:
 
     assert action is LogAction.REPLIED
     assert len(bot.sent) == 1
-    assert bot.sent[0]["text"] == DEFAULT_TEMPLATES[TemplateCode.OFF_HOURS_DEFAULT]
+    assert bot.sent[0]["text"] == (
+        f"{BOT_IDENTITY_PREFIX}\n{DEFAULT_TEMPLATES[TemplateCode.OFF_HOURS_DEFAULT]}"
+    )
     assert await actions(database) == ["skipped_window_limit"] * 4 + ["replied"]
 
 
@@ -289,7 +297,9 @@ async def test_dry_run_shows_the_owner_what_would_have_been_sent(world) -> None:
     chat_id, preview = notifier.previews[0]
     assert chat_id == 42
     assert preview.category == "money"
-    assert preview.reply_text == DEFAULT_TEMPLATES[TemplateCode.MONEY_PRIORITY]
+    assert preview.reply_text == (
+        f"{BOT_IDENTITY_PREFIX}\n{DEFAULT_TEMPLATES[TemplateCode.MONEY_PRIORITY]}"
+    )
     assert "03:14" in preview.render(), "the owner sees his own timezone"
     assert "буратино" not in preview.render(), "message bodies never leave the process"
 
@@ -371,6 +381,89 @@ async def test_invalid_connection_alerts_the_owner(world) -> None:
 
     assert action is LogAction.ERROR
     assert notifier.alerts and notifier.alerts[0][0] == 42
+    async with database.session() as session:
+        connection = await session.scalar(select(models.Connection))
+    assert connection is not None
+    assert connection.is_active is False
+    assert connection.kill_switch is True
+
+
+@pytest.mark.asyncio
+async def test_scheduled_task_retains_its_sender_identity(world) -> None:
+    pipeline, bot, _, database = world
+    await set_connection(database, dry_run=False, sender_identity="bot")
+    await pipeline.process_incoming(message())
+    task = (await scheduled(pipeline))[0]
+
+    await set_connection(database, sender_identity="owner")
+    await pipeline.deliver(task, now=NIGHT)
+
+    assert task.sender_identity == "bot"
+    assert bot.sent[0]["text"].startswith(BOT_IDENTITY_PREFIX)
+
+
+@pytest.mark.asyncio
+async def test_owner_identity_uses_configured_delay_and_no_prefix(world) -> None:
+    pipeline, bot, _, database = world
+    await set_connection(
+        database,
+        dry_run=False,
+        sender_identity="owner",
+        delay_min_seconds=17,
+        delay_max_seconds=17,
+    )
+
+    await pipeline.process_incoming(message())
+
+    assert await pipeline.queue.pop_due(now=NIGHT + timedelta(seconds=16)) == []
+    task = (await pipeline.queue.pop_due(now=NIGHT + timedelta(seconds=17)))[0]
+    await pipeline.deliver(task, now=NIGHT + timedelta(seconds=17))
+    assert bot.sent[0]["text"] == DEFAULT_TEMPLATES[TemplateCode.OFF_HOURS_DEFAULT]
+
+
+@pytest.mark.asyncio
+async def test_bot_identity_uses_the_technical_delay(world) -> None:
+    pipeline, _, _, database = world
+    await set_connection(database, sender_identity="bot", bot_delay_seconds=5)
+
+    await pipeline.process_incoming(message())
+
+    assert await pipeline.queue.pop_due(now=NIGHT + timedelta(seconds=4)) == []
+    task = (await pipeline.queue.pop_due(now=NIGHT + timedelta(seconds=5)))[0]
+    assert task.sender_identity == "bot"
+
+
+@pytest.mark.asyncio
+async def test_successful_send_marks_read_only_when_enabled(world) -> None:
+    pipeline, bot, _, database = world
+    await set_connection(
+        database,
+        dry_run=False,
+        mark_read=True,
+        rights_json={"can_reply": True, "can_read_messages": True},
+    )
+
+    await pipeline.process_incoming(message())
+    await pipeline.deliver((await scheduled(pipeline))[0], now=NIGHT)
+
+    assert bot.read == [
+        {
+            "business_connection_id": "connection-1",
+            "chat_id": 100,
+            "message_id": 7,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_successful_send_leaves_message_unread_by_default(world) -> None:
+    pipeline, bot, _, database = world
+    await set_connection(database, dry_run=False)
+
+    await pipeline.process_incoming(message())
+    await pipeline.deliver((await scheduled(pipeline))[0], now=NIGHT)
+
+    assert bot.read == []
 
 
 @pytest.mark.asyncio

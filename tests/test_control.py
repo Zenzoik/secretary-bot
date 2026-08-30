@@ -308,7 +308,7 @@ async def test_onboarding_fsm_persists_and_finishes_in_safe_dry_run(
 
 @pytest.mark.asyncio
 async def test_onboarding_refuses_missing_business_rights(database: Database) -> None:
-    await store_onboarding_customer(database, rights={"can_reply": True})
+    await store_onboarding_customer(database, rights={"can_read_messages": True})
     bot = FakeBot()
 
     assert await ControlPlane(database, bot).handle_business_connection(99, 99, now=NOW)
@@ -316,7 +316,21 @@ async def test_onboarding_refuses_missing_business_rights(database: Database) ->
     async with database.session() as session:
         access = await load_access_user(session, 99)
         assert access is not None and access.onboarding_state == "awaiting_connection"
-    assert "чтение сообщений" in bot.sent[-1]["text"]
+    assert "ответы" in bot.sent[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_onboarding_allows_reply_permission_without_read_permission(
+    database: Database,
+) -> None:
+    await store_onboarding_customer(database, rights={"can_reply": True})
+    bot = FakeBot()
+
+    assert await ControlPlane(database, bot).handle_business_connection(99, 99, now=NOW)
+
+    async with database.session() as session:
+        access = await load_access_user(session, 99)
+        assert access is not None and access.onboarding_state == "timezone"
 
 
 @pytest.mark.asyncio

@@ -404,6 +404,19 @@ async def set_connection_control(
     await session.flush()
 
 
+async def deactivate_connection(session: AsyncSession, connection_id: int) -> None:
+    """Fail closed after Telegram disables or invalidates a connection."""
+    row = await session.get(models.Connection, connection_id)
+    if row is None:
+        raise LookupError("connection not found")
+    row.is_active = False
+    row.kill_switch = True
+    row.muted_until = None
+    row.live_confirmation_until = None
+    row.control_state = "main"
+    await session.flush()
+
+
 async def set_delivery_preferences(
     session: AsyncSession,
     connection_id: int,

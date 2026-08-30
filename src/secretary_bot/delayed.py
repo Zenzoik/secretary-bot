@@ -6,14 +6,21 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
-MIN_DELAY_SECONDS = 60
-MAX_DELAY_SECONDS = 240
+MIN_DELAY_SECONDS = 10
+MAX_DELAY_SECONDS = 60
 
 
-def reply_delay(*, rng: random.Random | None = None) -> timedelta:
-    """FR-8: 60–240 seconds. An instant answer at 03:14 reads as a machine."""
+def reply_delay(
+    *,
+    min_seconds: int = MIN_DELAY_SECONDS,
+    max_seconds: int = MAX_DELAY_SECONDS,
+    rng: random.Random | None = None,
+) -> timedelta:
+    """Choose an inclusive delay inside the connection's configured range."""
+    if not 0 <= min_seconds <= max_seconds:
+        raise ValueError("delay must satisfy 0 <= min <= max")
     generator = rng or random
-    return timedelta(seconds=generator.randint(MIN_DELAY_SECONDS, MAX_DELAY_SECONDS))
+    return timedelta(seconds=generator.randint(min_seconds, max_seconds))
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +39,7 @@ class ReplyTask:
     template_code: str
     category: str
     incoming_at: str
+    sender_identity: str = "owner"
     confidence: str | None = None
     window_key: str | None = None
     contact_name: str | None = None
@@ -45,7 +53,10 @@ class ReplyTask:
 
     @classmethod
     def from_json(cls, payload: str) -> ReplyTask:
-        return cls(**json.loads(payload))
+        values = json.loads(payload)
+        # Tasks created before Stage 1.7 were always sent as the owner.
+        values.setdefault("sender_identity", "owner")
+        return cls(**values)
 
 
 class SortedSetClient(Protocol):
