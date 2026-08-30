@@ -32,7 +32,6 @@ def test_visible_cyrillic_is_centralized_in_the_text_catalog() -> None:
 def test_shipped_templates_and_controls_are_ukrainian() -> None:
     assert DEFAULT_TEMPLATES[TemplateCode.OFF_HOURS_DEFAULT] == texts.OFF_HOURS_TEMPLATE
     assert DEFAULT_TEMPLATES[TemplateCode.MONEY_PRIORITY] == texts.MONEY_PRIORITY_TEMPLATE
-    assert "Відповідає секретар" in texts.BOT_IDENTITY_PREFIX
     assert "Сьогодні" in texts.BUTTON_TODAY
     assert "вимкнено" in texts.SECRETARY_OFF
 

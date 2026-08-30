@@ -23,7 +23,6 @@ from secretary_bot.storage import (
     upsert_connection,
 )
 from secretary_bot.templates import DEFAULT_TEMPLATES, TemplateCode
-from secretary_bot.texts import BOT_IDENTITY_PREFIX
 from tests.test_delayed import FakeSortedSet
 
 # Monday 03:14 in Kyiv — inside the 22:00–08:00 quiet window.
@@ -149,9 +148,7 @@ async def test_night_message_is_scheduled_once_and_answered_once(world) -> None:
 
     assert action is LogAction.REPLIED
     assert len(bot.sent) == 1
-    assert bot.sent[0]["text"] == (
-        f"{BOT_IDENTITY_PREFIX}\n{DEFAULT_TEMPLATES[TemplateCode.OFF_HOURS_DEFAULT]}"
-    )
+    assert bot.sent[0]["text"] == DEFAULT_TEMPLATES[TemplateCode.OFF_HOURS_DEFAULT]
     assert await actions(database) == ["skipped_window_limit"] * 4 + ["replied"]
 
 
@@ -297,9 +294,7 @@ async def test_dry_run_shows_the_owner_what_would_have_been_sent(world) -> None:
     chat_id, preview = notifier.previews[0]
     assert chat_id == 42
     assert preview.category == "money"
-    assert preview.reply_text == (
-        f"{BOT_IDENTITY_PREFIX}\n{DEFAULT_TEMPLATES[TemplateCode.MONEY_PRIORITY]}"
-    )
+    assert preview.reply_text == DEFAULT_TEMPLATES[TemplateCode.MONEY_PRIORITY]
     assert "03:14" in preview.render(), "the owner sees his own timezone"
     assert "буратино" not in preview.render(), "message bodies never leave the process"
 
@@ -399,7 +394,7 @@ async def test_scheduled_task_retains_its_sender_identity(world) -> None:
     await pipeline.deliver(task, now=NIGHT)
 
     assert task.sender_identity == "bot"
-    assert bot.sent[0]["text"].startswith(BOT_IDENTITY_PREFIX)
+    assert bot.sent[0]["text"] == DEFAULT_TEMPLATES[TemplateCode.OFF_HOURS_DEFAULT]
 
 
 @pytest.mark.asyncio

@@ -110,7 +110,6 @@ FEEDBACK_RESULTS = {
     "exclude": ("✅ Оброблено: кандидат на виключення", "Оцінку записано"),
 }
 
-BOT_IDENTITY_PREFIX = "🤖 Відповідає секретар:"
 OFF_HOURS_TEMPLATE = "Зараз неробочий час, відповім пізніше"
 MONEY_PRIORITY_TEMPLATE = (
     "Зараз неробочий час. Питання щодо оплати побачив, відповім насамперед уранці."
@@ -130,12 +129,6 @@ CONNECTION_LOST_ALERT = (
     "⚠️ Telegram відхилив відправлення: з'єднання недійсне. "
     "Чергу відповідей очищено, автовідповіді зупинено."
 )
-
-
-def as_bot_reply(text: str) -> str:
-    return f"{BOT_IDENTITY_PREFIX}\n{text}"
-
-
 def missing_rights(rights: list[str]) -> str:
     return (
         "Бракує прав Telegram: "
