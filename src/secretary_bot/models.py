@@ -112,6 +112,8 @@ class Connection(Base):
     live_confirmation_until: Mapped[datetime | None] = mapped_column(UtcDateTime())
     control_state: Mapped[str] = mapped_column(Text, server_default=sql_text("'main'"))
     timezone: Mapped[str] = mapped_column(Text, server_default=sql_text("'Europe/Kyiv'"))
+    summary_time: Mapped[time] = mapped_column(Time, server_default=sql_text("'09:00:00'"))
+    summary_channel_id: Mapped[int | None] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         UtcDateTime(), server_default=func.now(), onupdate=func.now()
@@ -166,6 +168,24 @@ class Schedule(Base):
     connection_id: Mapped[int] = mapped_column(
         ForeignKey("connections.id", ondelete="CASCADE"), index=True
     )
+    weekday_mask: Mapped[int] = mapped_column(SmallInteger)
+    time_from: Mapped[time] = mapped_column(Time)
+    time_to: Mapped[time] = mapped_column(Time)
+    is_active: Mapped[bool] = mapped_column(Boolean, server_default=sql_text("true"))
+
+
+class ContactWindow(Base):
+    __tablename__ = "contact_windows"
+    __table_args__ = (
+        CheckConstraint("weekday_mask BETWEEN 1 AND 127", name="weekday_mask_range"),
+        UniqueConstraint("connection_id", "contact_id", "weekday_mask", "time_from", "time_to"),
+    )
+
+    id: Mapped[int] = mapped_column(SURROGATE_KEY, primary_key=True, autoincrement=True)
+    connection_id: Mapped[int] = mapped_column(
+        ForeignKey("connections.id", ondelete="CASCADE"), index=True
+    )
+    contact_id: Mapped[int] = mapped_column(BigInteger)
     weekday_mask: Mapped[int] = mapped_column(SmallInteger)
     time_from: Mapped[time] = mapped_column(Time)
     time_to: Mapped[time] = mapped_column(Time)
@@ -234,6 +254,29 @@ class Prompt(Base):
     )
 
 
+class ClassificationDirection(Base):
+    __tablename__ = "classification_directions"
+    __table_args__ = (
+        CheckConstraint("code IN ('general', 'money')", name="code_values"),
+        UniqueConstraint("connection_id", "code"),
+    )
+
+    id: Mapped[int] = mapped_column(SURROGATE_KEY, primary_key=True, autoincrement=True)
+    connection_id: Mapped[int] = mapped_column(
+        ForeignKey("connections.id", ondelete="CASCADE"), index=True
+    )
+    code: Mapped[str] = mapped_column(Text)
+    label: Mapped[str] = mapped_column(Text)
+    description: Mapped[str] = mapped_column(Text)
+    keywords_json: Mapped[list[str]] = mapped_column(
+        JSON_DOCUMENT, server_default=sql_text("'[]'"), default=list
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, server_default=sql_text("true"))
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime(), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class ContactActivity(Base):
     __tablename__ = "contact_activity"
 
@@ -241,10 +284,30 @@ class ContactActivity(Base):
         ForeignKey("connections.id", ondelete="CASCADE"), primary_key=True
     )
     contact_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    contact_name: Mapped[str | None] = mapped_column(Text)
     last_incoming_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
     owner_last_reply_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
     last_auto_reply_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
     quiet_window_key: Mapped[str | None] = mapped_column(Text)
+
+
+class WebSession(Base):
+    __tablename__ = "web_sessions"
+    __table_args__ = (
+        CheckConstraint("kind IN ('exchange', 'session')", name="kind_values"),
+        Index("ix_web_sessions_user_expires", "user_id", "expires_at"),
+    )
+
+    id: Mapped[int] = mapped_column(SURROGATE_KEY, primary_key=True, autoincrement=True)
+    token_hash: Mapped[bytes] = mapped_column(LargeBinary(32), unique=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("access_users.user_id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(Text)
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime(), index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
+    last_used_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
 
 
 class MessageLog(Base):

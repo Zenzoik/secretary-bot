@@ -93,6 +93,16 @@ def test_message_outside_the_quiet_window_is_skipped() -> None:
     assert result.window_key is None
 
 
+def test_contact_windows_replace_the_global_schedule() -> None:
+    daytime = QuietWindow(77, ALL_DAYS, time(11, 0), time(13, 0))
+    contact = ContactState(windows=(daytime,))
+
+    assert evaluate_gate(policy(), contact, now=INSIDE_NIGHT).decision is (
+        GateDecision.SKIPPED_SCHEDULE
+    )
+    assert evaluate_gate(policy(), contact, now=OUTSIDE_NIGHT).decision is GateDecision.ALLOWED
+
+
 def test_second_message_in_the_same_window_is_skipped() -> None:
     allowed = evaluate_gate(policy(), ContactState(), now=INSIDE_NIGHT)
     contact = ContactState(last_auto_reply_window_key=allowed.window_key)

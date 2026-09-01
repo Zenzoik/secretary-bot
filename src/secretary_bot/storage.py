@@ -48,6 +48,8 @@ class ConnectionRecord:
     delay_max_seconds: int
     bot_delay_seconds: int
     mark_read: bool
+    summary_time: time
+    summary_channel_id: int | None
     control_state: str
     policy: ConnectionPolicy
 
@@ -545,7 +547,10 @@ async def load_contact_card(
             models.Template.code.in_([code.value for code in TemplateCode]),
         )
     )
-    contact_name = None if exclusion is None else exclusion.contact_name
+    activity = await session.get(models.ContactActivity, (connection_id, contact_id))
+    contact_name = None if activity is None else activity.contact_name
+    if contact_name is None:
+        contact_name = None if exclusion is None else exclusion.contact_name
     if contact_name is None:
         contact_name = await session.scalar(
             select(models.MorningQueue.contact_name)
@@ -653,9 +658,26 @@ async def load_contact_state(
         )
     )
     activity = await session.get(models.ContactActivity, (connection_id, contact_id))
+    window_rows = await session.scalars(
+        select(models.ContactWindow).where(
+            models.ContactWindow.connection_id == connection_id,
+            models.ContactWindow.contact_id == contact_id,
+        )
+    )
+    windows = tuple(
+        QuietWindow(
+            schedule_id=row.id,
+            weekday_mask=row.weekday_mask,
+            time_from=row.time_from,
+            time_to=row.time_to,
+            is_active=row.is_active,
+        )
+        for row in window_rows
+    )
     return ContactState(
         exclusion=None if exclusion_row is None else Exclusion(until=exclusion_row.until),
         last_auto_reply_window_key=None if activity is None else activity.quiet_window_key,
+        windows=windows,
     )
 
 
@@ -679,13 +701,34 @@ async def load_classifier_settings(
             models.Prompt.connection_id == connection_id, models.Prompt.code == "classifier"
         )
     )
+    direction = await session.scalar(
+        select(models.ClassificationDirection).where(
+            models.ClassificationDirection.connection_id == connection_id,
+            models.ClassificationDirection.code == "money",
+        )
+    )
+    money_keywords = (
+        defaults.money_keywords
+        if direction is None
+        else tuple(str(keyword) for keyword in (direction.keywords_json or []))
+    )
+    money_enabled = defaults.money_enabled if direction is None else direction.is_active
     if row is None:
-        return defaults
+        return ClassifierSettings(
+            system_prompt=defaults.system_prompt,
+            model=defaults.model,
+            confidence_min=defaults.confidence_min,
+            timeout_seconds=defaults.timeout_seconds,
+            money_keywords=money_keywords,
+            money_enabled=money_enabled,
+        )
     return ClassifierSettings(
         system_prompt=row.system_prompt,
         model=row.model,
         confidence_min=Decimal(row.confidence_min),
         timeout_seconds=defaults.timeout_seconds,
+        money_keywords=money_keywords,
+        money_enabled=money_enabled,
     )
 
 
@@ -723,9 +766,17 @@ async def log_decision(
 
 
 async def record_incoming(
-    session: AsyncSession, connection_id: int, contact_id: int, *, at: datetime
+    session: AsyncSession,
+    connection_id: int,
+    contact_id: int,
+    *,
+    at: datetime,
+    contact_name: str | None = None,
 ) -> None:
-    await _touch_activity(session, connection_id, contact_id, last_incoming_at=at)
+    values: dict[str, object] = {"last_incoming_at": at}
+    if contact_name:
+        values["contact_name"] = contact_name[:200]
+    await _touch_activity(session, connection_id, contact_id, **values)
 
 
 async def record_owner_reply(
@@ -874,6 +925,8 @@ async def _record(session: AsyncSession, row: models.Connection) -> ConnectionRe
         delay_max_seconds=row.delay_max_seconds,
         bot_delay_seconds=row.bot_delay_seconds,
         mark_read=row.mark_read,
+        summary_time=row.summary_time,
+        summary_channel_id=row.summary_channel_id,
         control_state=row.control_state,
         policy=ConnectionPolicy(
             timezone=row.timezone,

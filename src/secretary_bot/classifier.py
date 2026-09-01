@@ -95,6 +95,8 @@ class ClassifierSettings:
     model: str = DEFAULT_MODEL
     confidence_min: Decimal = DEFAULT_CONFIDENCE_MIN
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+    money_keywords: tuple[str, ...] = MONEY_KEYWORDS
+    money_enabled: bool = True
 
 
 class LanguageModel(Protocol):
@@ -118,7 +120,12 @@ async def classify(
     """
     settings = settings or ClassifierSettings()
     if model is None:
-        return classify_by_keywords(text, reason="llm disabled")
+        return classify_by_keywords(
+            text,
+            reason="llm disabled",
+            money_keywords=settings.money_keywords,
+            money_enabled=settings.money_enabled,
+        )
 
     try:
         raw = await asyncio.wait_for(
@@ -129,13 +136,35 @@ async def classify(
         raise
     except Exception as exc:  # timeout, transport failure, bad credentials — all mean silence
         logger.warning("classifier fell back to keywords: %s", type(exc).__name__)
-        return classify_by_keywords(text, reason=f"llm unavailable: {type(exc).__name__}")
+        return classify_by_keywords(
+            text,
+            reason=f"llm unavailable: {type(exc).__name__}",
+            money_keywords=settings.money_keywords,
+            money_enabled=settings.money_enabled,
+        )
 
-    return _interpret(raw, confidence_min=settings.confidence_min)
+    return _interpret(
+        raw,
+        confidence_min=settings.confidence_min,
+        money_enabled=settings.money_enabled,
+    )
 
 
-def classify_by_keywords(text: str, *, reason: str) -> Classification:
-    if _MONEY_PATTERN.search(text):
+def classify_by_keywords(
+    text: str,
+    *,
+    reason: str,
+    money_keywords: tuple[str, ...] = MONEY_KEYWORDS,
+    money_enabled: bool = True,
+) -> Classification:
+    pattern = (
+        _MONEY_PATTERN
+        if money_keywords == MONEY_KEYWORDS
+        else re.compile(rf"\b(?:{'|'.join(map(re.escape, money_keywords))})", re.IGNORECASE)
+        if money_keywords
+        else None
+    )
+    if money_enabled and pattern is not None and pattern.search(text):
         return Classification(
             category=Category.MONEY,
             source=ClassificationSource.KEYWORDS,
@@ -148,7 +177,7 @@ def classify_by_keywords(text: str, *, reason: str) -> Classification:
     )
 
 
-def _interpret(raw: str, *, confidence_min: Decimal) -> Classification:
+def _interpret(raw: str, *, confidence_min: Decimal, money_enabled: bool = True) -> Classification:
     payload = _load(raw)
     if payload is None:
         return Classification(
@@ -159,7 +188,7 @@ def _interpret(raw: str, *, confidence_min: Decimal) -> Classification:
 
     confidence = _confidence(payload.get("confidence"))
     reason = str(payload.get("reason", ""))[:200]
-    if payload.get("category") != Category.MONEY.value:
+    if payload.get("category") != Category.MONEY.value or not money_enabled:
         return Classification(Category.GENERAL, ClassificationSource.LLM, reason, confidence)
     if confidence is None:
         return Classification(

@@ -9,6 +9,8 @@ EXPECTED_TABLES = {
     "access_users",
     "connections",
     "contact_activity",
+    "contact_windows",
+    "classification_directions",
     "exclusions",
     "message_log",
     "morning_queue",
@@ -17,6 +19,7 @@ EXPECTED_TABLES = {
     "schedules",
     "shadow_feedback",
     "templates",
+    "web_sessions",
 }
 
 
@@ -38,6 +41,7 @@ def test_tenant_tables_cascade_from_connection() -> None:
         "access_users",
         "connections",
         "shadow_feedback",
+        "web_sessions",
     }
 
     for table_name in direct_tenant_tables:
@@ -77,6 +81,8 @@ def test_critical_domain_checks_are_present() -> None:
             "ck_connections_sender_identity_values",
         },
         "schedules": {"ck_schedules_weekday_mask_range"},
+        "contact_windows": {"ck_contact_windows_weekday_mask_range"},
+        "classification_directions": {"ck_classification_directions_code_values"},
         "overrides": {"ck_overrides_mode_values"},
         "prompts": {"ck_prompts_confidence_min_range"},
         "message_log": {
@@ -86,6 +92,7 @@ def test_critical_domain_checks_are_present() -> None:
             "ck_message_log_direction_values",
         },
         "shadow_feedback": {"ck_shadow_feedback_verdict_values"},
+        "web_sessions": {"ck_web_sessions_kind_values"},
     }
 
     for table_name, names in expected.items():

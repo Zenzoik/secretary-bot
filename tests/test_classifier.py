@@ -134,6 +134,32 @@ async def test_llm_error_falls_back_to_the_keyword_dictionary() -> None:
 
 
 @pytest.mark.asyncio
+async def test_owner_keywords_control_the_fallback_dictionary() -> None:
+    settings = ClassifierSettings(money_keywords=("гонорар",))
+
+    custom = await classify("коли буде гонорар?", settings=settings)
+    old_default = await classify("коли буде оплата?", settings=settings)
+
+    assert custom.category is Category.MONEY
+    assert old_default.category is Category.GENERAL
+
+
+@pytest.mark.asyncio
+async def test_disabled_money_direction_is_fail_safe_for_llm_and_keywords() -> None:
+    settings = ClassifierSettings(money_enabled=False)
+
+    keyword = await classify("оплата", settings=settings)
+    llm = await classify(
+        "оплата",
+        model=FakeModel(answer=answer("money", 0.99)),
+        settings=settings,
+    )
+
+    assert keyword.category is Category.GENERAL
+    assert llm.category is Category.GENERAL
+
+
+@pytest.mark.asyncio
 async def test_slow_llm_times_out_into_the_keyword_dictionary() -> None:
     model = FakeModel(answer=answer("general", 0.99), delay=1.0)
 

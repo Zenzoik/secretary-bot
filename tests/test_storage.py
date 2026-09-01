@@ -370,6 +370,27 @@ async def test_contact_without_history_has_empty_state(session: AsyncSession) ->
 
 
 @pytest.mark.asyncio
+async def test_contact_state_loads_personal_windows(session: AsyncSession) -> None:
+    connection_id = await stored_connection(session)
+    session.add(
+        models.ContactWindow(
+            connection_id=connection_id,
+            contact_id=100,
+            weekday_mask=31,
+            time_from=time(18, 0),
+            time_to=time(9, 0),
+        )
+    )
+    await session.flush()
+
+    state = await load_contact_state(session, connection_id, 100)
+
+    assert len(state.windows) == 1
+    assert state.windows[0].weekday_mask == 31
+    assert state.windows[0].time_from == time(18, 0)
+
+
+@pytest.mark.asyncio
 async def test_owner_reply_is_compared_against_the_incoming_message(session: AsyncSession) -> None:
     connection_id = await stored_connection(session)
     await record_incoming(session, connection_id, 100, at=NOW)
@@ -384,6 +405,18 @@ async def test_owner_reply_is_compared_against_the_incoming_message(session: Asy
         await owner_replied_since(session, connection_id, 100, moment=NOW + timedelta(minutes=2))
         is False
     )
+
+
+@pytest.mark.asyncio
+async def test_incoming_contact_name_is_kept_for_the_settings_list(
+    session: AsyncSession,
+) -> None:
+    connection_id = await stored_connection(session)
+
+    await record_incoming(session, connection_id, 100, at=NOW, contact_name="Test Contact")
+    activity = await session.get(models.ContactActivity, (connection_id, 100))
+
+    assert activity is not None and activity.contact_name == "Test Contact"
 
 
 @pytest.mark.asyncio
@@ -512,6 +545,29 @@ async def test_classifier_settings_are_owner_editable(session: AsyncSession) -> 
     assert settings.model == "claude-sonnet-5"
     assert settings.confidence_min == Decimal("0.85")
     assert settings.timeout_seconds == 3.0
+
+
+@pytest.mark.asyncio
+async def test_classifier_direction_controls_keywords_and_activation(
+    session: AsyncSession,
+) -> None:
+    connection_id = await stored_connection(session)
+    session.add(
+        models.ClassificationDirection(
+            connection_id=connection_id,
+            code="money",
+            label="Оплата",
+            description="Фінансові питання",
+            keywords_json=["гонорар", "аванс"],
+            is_active=False,
+        )
+    )
+    await session.flush()
+
+    settings = await load_classifier_settings(session, connection_id)
+
+    assert settings.money_keywords == ("гонорар", "аванс")
+    assert settings.money_enabled is False
 
 
 @pytest.mark.asyncio

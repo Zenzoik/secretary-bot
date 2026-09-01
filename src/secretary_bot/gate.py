@@ -72,6 +72,7 @@ class ConnectionPolicy:
 class ContactState:
     exclusion: Exclusion | None = None
     last_auto_reply_window_key: str | None = None
+    windows: tuple[QuietWindow, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +99,8 @@ def evaluate_gate(policy: ConnectionPolicy, contact: ContactState, *, now: datet
     if contact.exclusion is not None and contact.exclusion.covers(now):
         return GateResult(GateDecision.SKIPPED_EXCLUDED)
 
-    occurrence = current_window(policy.windows, now.astimezone(ZoneInfo(policy.timezone)))
+    windows = contact.windows or policy.windows
+    occurrence = current_window(windows, now.astimezone(ZoneInfo(policy.timezone)))
     if occurrence is None:
         return GateResult(GateDecision.SKIPPED_SCHEDULE)
     if contact.last_auto_reply_window_key == occurrence.key:

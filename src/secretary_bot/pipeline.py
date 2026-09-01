@@ -40,6 +40,7 @@ from secretary_bot.texts import CONNECTION_LOST_ALERT, as_bot_reply
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass(frozen=True, slots=True)
 class IncomingMessage:
     """One ``business_message``, already stripped of Telegram specifics."""
@@ -77,9 +78,7 @@ class Pipeline:
                 return
 
             if not connection.rights.get("can_reply", False):
-                await self._log(
-                    session, connection, incoming, LogAction.SKIPPED_INACTIVE
-                )
+                await self._log(session, connection, incoming, LogAction.SKIPPED_INACTIVE)
                 return
 
             if incoming.filter_result is HardFilterResult.OWNER_MESSAGE:
@@ -90,7 +89,11 @@ class Pipeline:
                 return
             if incoming.filter_result is HardFilterResult.UNSUPPORTED_CONTENT:
                 await record_incoming(
-                    session, connection.id, incoming.contact_id, at=incoming.received_at
+                    session,
+                    connection.id,
+                    incoming.contact_id,
+                    at=incoming.received_at,
+                    contact_name=incoming.contact_name,
                 )
                 await self._log(
                     session, connection, incoming, LogAction.SKIPPED_UNSUPPORTED_CONTENT
@@ -101,7 +104,11 @@ class Pipeline:
                 return
 
             await record_incoming(
-                session, connection.id, incoming.contact_id, at=incoming.received_at
+                session,
+                connection.id,
+                incoming.contact_id,
+                at=incoming.received_at,
+                contact_name=incoming.contact_name,
             )
             contact = await load_contact_state(session, connection.id, incoming.contact_id)
             gate = evaluate_gate(connection.policy, contact, now=incoming.received_at)
@@ -222,8 +229,10 @@ class Pipeline:
                 await deactivate_connection(session, connection.id)
             await self.queue.cancel_connection(connection.id)
             await self._alert(connection, CONNECTION_LOST_ALERT)
-        elif result.is_sent and connection.mark_read and connection.rights.get(
-            "can_read_messages", False
+        elif (
+            result.is_sent
+            and connection.mark_read
+            and connection.rights.get("can_read_messages", False)
         ):
             await self.sender.mark_read(
                 business_connection_id=connection.business_connection_id,
