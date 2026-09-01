@@ -30,6 +30,7 @@ from secretary_bot.pipeline import Pipeline
 from secretary_bot.runtime import RuntimeState, TelegramBot, process_updates
 from secretary_bot.sender import BusinessReplySender
 from secretary_bot.storage import Database, ensure_master
+from secretary_bot.web_api import build_web_router
 from secretary_bot.workers import run_delayed_replies, run_morning_digest
 
 
@@ -119,6 +120,7 @@ def create_app(
     app.state.runtime = state
     app.state.ingestor = ingestor
     app.state.pipeline = pipeline
+    app.include_router(build_web_router(database=connection_database, settings=settings))
 
     @app.get("/healthz")
     async def health() -> dict[str, object]:
