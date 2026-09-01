@@ -5,10 +5,13 @@ import contextlib
 import hmac
 import logging
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 from aiogram import Bot
 from aiogram.types import Update
 from fastapi import FastAPI, Header, HTTPException, Request, status
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from redis.asyncio import Redis
 
@@ -32,6 +35,8 @@ from secretary_bot.sender import BusinessReplySender
 from secretary_bot.storage import Database, ensure_master
 from secretary_bot.web_api import build_web_router
 from secretary_bot.workers import run_delayed_replies, run_morning_digest
+
+WEB_ROOT = Path(__file__).parent / "web" / "static"
 
 
 def create_app(
@@ -121,6 +126,17 @@ def create_app(
     app.state.ingestor = ingestor
     app.state.pipeline = pipeline
     app.include_router(build_web_router(database=connection_database, settings=settings))
+    app.mount("/assets", StaticFiles(directory=WEB_ROOT), name="web-assets")
+
+    @app.get("/app", include_in_schema=False)
+    async def web_app_redirect() -> RedirectResponse:
+        return RedirectResponse("/app/", status_code=status.HTTP_308_PERMANENT_REDIRECT)
+
+    @app.get("/app/", response_class=HTMLResponse, include_in_schema=False)
+    async def web_app(request: Request) -> HTMLResponse:
+        base_url = (settings.public_base_url or str(request.base_url)).rstrip("/")
+        html = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        return HTMLResponse(html.replace("{{BASE_URL}}", base_url))
 
     @app.get("/healthz")
     async def health() -> dict[str, object]:

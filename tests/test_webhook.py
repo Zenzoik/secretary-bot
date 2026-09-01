@@ -226,6 +226,20 @@ def test_health_does_not_expose_secrets(world) -> None:
     assert SECRET not in response.text
 
 
+def test_settings_app_and_assets_are_served_without_exposing_secrets(world) -> None:
+    client, *_ = world
+
+    with client:
+        page = client.get("/app/")
+        stylesheet = client.get("/assets/styles.css")
+        script = client.get("/assets/app.js")
+
+    assert page.status_code == stylesheet.status_code == script.status_code == 200
+    assert "Personal Secretary" in page.text
+    assert 'content="http://testserver/assets/og.png"' in page.text
+    assert SECRET not in page.text + stylesheet.text + script.text
+
+
 def test_webhook_rejects_missing_or_wrong_secret(world) -> None:
     client, *_ = world
 

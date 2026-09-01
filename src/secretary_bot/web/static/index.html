@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0d141f">
+    <meta name="description" content="Налаштування персонального Telegram-секретаря">
+    <meta property="og:title" content="Personal Secretary">
+    <meta property="og:description" content="Налаштування без зайвих кроків">
+    <meta property="og:image" content="{{BASE_URL}}/assets/og.png">
+    <title>Personal Secretary — налаштування</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+    <script src="https://telegram.org/js/telegram-web-app.js?59"></script>
+    <script src="/assets/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell" id="app" aria-busy="true">
+      <aside class="sidebar">
+        <a class="brand" href="#overview" aria-label="Personal Secretary">
+          <span class="brand-mark">PS</span>
+          <span><strong>Personal Secretary</strong><small>Панель власника</small></span>
+        </a>
+        <nav class="navigation" id="navigation" aria-label="Розділи">
+          <button data-view="overview"><span>01</span> Огляд</button>
+          <button data-view="schedule"><span>02</span> Розклад</button>
+          <button data-view="contacts"><span>03</span> Контакти</button>
+          <button data-view="templates"><span>04</span> Шаблони</button>
+          <button data-view="classifier"><span>05</span> Класифікація</button>
+          <button data-view="summary"><span>06</span> Самарі</button>
+          <button data-view="logs"><span>07</span> Журнал</button>
+        </nav>
+        <div class="sidebar-footer">
+          <button class="text-button" id="browser-link">Відкрити у браузері</button>
+          <button class="text-button hidden" id="logout">Вийти</button>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow" id="eyebrow">Панель керування</p>
+            <h1 id="page-title">Огляд</h1>
+          </div>
+          <div class="connection-pill" id="connection-pill">
+            <span class="pulse"></span><span>Завантаження</span>
+          </div>
+        </header>
+
+        <section class="loading-state" id="loading-state" aria-label="Завантаження">
+          <div class="skeleton wide"></div>
+          <div class="skeleton-grid">
+            <div class="skeleton"></div><div class="skeleton"></div>
+          </div>
+          <div class="skeleton tall"></div>
+        </section>
+
+        <section class="auth-state hidden" id="auth-state">
+          <p class="eyebrow">Безпечний доступ</p>
+          <h2>Відкрийте панель через бота</h2>
+          <p>У Telegram натисніть кнопку меню бота. Для браузера використайте одноразове посилання з уже авторизованої панелі.</p>
+        </section>
+
+        <div id="views" class="hidden">
+          <section class="view" data-view-panel="overview">
+            <div class="status-grid" id="status-grid"></div>
+            <form class="panel" id="delivery-form">
+              <div class="panel-heading">
+                <div><p class="eyebrow">Відповіді</p><h2>Спосіб доставки</h2></div>
+                <span class="section-note">Зміни діють без рестарту</span>
+              </div>
+              <div class="segmented" role="radiogroup" aria-label="Особистість відправника">
+                <label><input type="radio" name="sender_identity" value="bot"><span>Від секретаря</span></label>
+                <label><input type="radio" name="sender_identity" value="owner"><span>Від власника</span></label>
+              </div>
+              <div class="form-grid three">
+                <label>Мін. затримка власника, с<input name="delay_min_seconds" type="number" min="0" max="3600" required></label>
+                <label>Макс. затримка, с<input name="delay_max_seconds" type="number" min="1" max="3600" required></label>
+                <label>Мін. затримка бота, с<input name="bot_delay_seconds" type="number" min="1" max="60" required></label>
+              </div>
+              <label class="switch-row"><span><strong>Позначати прочитаним</strong><small>Тільки після успішної відповіді</small></span><input name="mark_read" type="checkbox" role="switch"></label>
+              <div class="form-actions"><button class="primary" type="submit">Зберегти доставку</button></div>
+            </form>
+          </section>
+
+          <section class="view" data-view-panel="schedule">
+            <form class="panel" id="schedule-form">
+              <div class="panel-heading">
+                <div><p class="eyebrow">Автовідповідь</p><h2>Неробочі години</h2></div>
+                <button class="secondary" id="add-schedule-window" type="button">+ Додати вікно</button>
+              </div>
+              <label class="field-compact">Часовий пояс<select name="timezone" id="timezone-select"></select></label>
+              <div class="window-list" id="schedule-windows"></div>
+              <div class="form-actions"><button class="primary" type="submit">Зберегти розклад</button></div>
+            </form>
+          </section>
+
+          <section class="view" data-view-panel="contacts">
+            <div class="panel">
+              <div class="panel-heading">
+                <div><p class="eyebrow">Персональні правила</p><h2>Контакти</h2></div>
+                <label class="search"><span>Пошук</span><input id="contact-search" type="search" placeholder="Ім’я або Telegram ID"></label>
+              </div>
+              <div class="contact-layout">
+                <div class="contact-list" id="contact-list"></div>
+                <form class="contact-editor empty" id="contact-form">
+                  <div id="contact-empty">Оберіть контакт, щоб змінити правила.</div>
+                  <div id="contact-fields" class="hidden">
+                    <p class="eyebrow">Контакт</p><h3 id="contact-title"></h3><p class="muted" id="contact-meta"></p>
+                    <fieldset><legend>Виключення</legend>
+                      <label><input type="radio" name="exclusion" value="none"> Немає</label>
+                      <label><input type="radio" name="exclusion" value="until"> До дати</label>
+                      <label><input type="radio" name="exclusion" value="forever"> Назавжди</label>
+                      <input name="exclusion_until" type="datetime-local" aria-label="До якої дати">
+                    </fieldset>
+                    <div class="subheading"><strong>Персональні вікна</strong><button class="text-button" id="add-contact-window" type="button">+ Додати</button></div>
+                    <p class="muted small">Якщо вікна задані, вони замінюють загальний розклад.</p>
+                    <div class="window-list compact" id="contact-windows"></div>
+                    <div class="form-actions"><button class="primary" type="submit">Зберегти контакт</button></div>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </section>
+
+          <section class="view" data-view-panel="templates">
+            <form class="panel" id="templates-form">
+              <div class="panel-heading"><div><p class="eyebrow">Тексти</p><h2>Шаблони відповідей</h2></div><span class="section-note">До 1000 символів</span></div>
+              <div class="template-grid">
+                <label><span>Звичайна відповідь</span><small>Для напрямку general</small><textarea name="off_hours_default" rows="6" maxlength="1000" required></textarea></label>
+                <label><span>Питання про гроші</span><small>Для напрямку money</small><textarea name="money_priority" rows="6" maxlength="1000" required></textarea></label>
+              </div>
+              <div class="form-actions"><button class="primary" type="submit">Зберегти шаблони</button></div>
+            </form>
+          </section>
+
+          <section class="view" data-view-panel="classifier">
+            <form class="panel" id="classifier-form">
+              <div class="panel-heading"><div><p class="eyebrow">Маршрутизація</p><h2>Напрямки класифікації</h2></div></div>
+              <div class="direction-list" id="direction-list"></div>
+              <div class="divider"></div>
+              <label>Системний prompt<textarea name="system_prompt" rows="10" maxlength="8000" required></textarea></label>
+              <div class="form-grid two">
+                <label>Модель<input name="model" maxlength="100" required></label>
+                <label>Поріг упевненості<input name="confidence_min" type="number" min="0" max="1" step="0.01" required></label>
+              </div>
+              <div class="form-actions"><button class="primary" type="submit">Зберегти класифікацію</button></div>
+            </form>
+          </section>
+
+          <section class="view" data-view-panel="summary">
+            <form class="panel narrow" id="summary-form">
+              <div class="panel-heading"><div><p class="eyebrow">Наступний етап</p><h2>Суточне самарі</h2></div><span class="badge neutral">Підготовлено</span></div>
+              <p class="muted">Час і канал уже зберігаються. Публікацію ввімкнемо після окремого підтвердження зберігання повідомлень.</p>
+              <label>Локальний час<input name="summary_time" type="time" required></label>
+              <label>Telegram channel ID<input name="summary_channel_id" type="number" placeholder="-1001234567890"><small>Числовий ID приватного каналу, де бот є адміністратором.</small></label>
+              <div class="form-actions"><button class="primary" type="submit">Зберегти самарі</button></div>
+            </form>
+          </section>
+
+          <section class="view" data-view-panel="logs">
+            <div class="panel">
+              <div class="panel-heading"><div><p class="eyebrow">Останні 30 днів</p><h2>Журнал рішень</h2></div></div>
+              <form class="filter-bar" id="log-filter">
+                <label>Контакт ID<input name="contact_id" type="number" min="1" placeholder="Усі"></label>
+                <label>Дія<select name="action"><option value="">Усі дії</option></select></label>
+                <button class="secondary" type="submit">Застосувати</button>
+              </form>
+              <div class="table-wrap"><table><thead><tr><th>Час</th><th>Контакт</th><th>Дія</th><th>Напрямок</th><th>Деталі</th></tr></thead><tbody id="log-rows"></tbody></table></div>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <template id="window-template">
+      <div class="window-row">
+        <label>Дні<select class="weekday-mask"><option value="127">Щодня</option><option value="31">Будні</option><option value="96">Вихідні</option><option value="1">Понеділок</option><option value="2">Вівторок</option><option value="4">Середа</option><option value="8">Четвер</option><option value="16">П’ятниця</option><option value="32">Субота</option><option value="64">Неділя</option></select></label>
+        <label>Від<input class="time-from" type="time" required></label>
+        <label>До<input class="time-to" type="time" required></label>
+        <label class="tiny-switch" title="Активне вікно"><input class="is-active" type="checkbox" checked><span>Активне</span></label>
+        <button class="icon-button remove-window" type="button" aria-label="Видалити вікно">×</button>
+      </div>
+    </template>
+  </body>
+</html>
