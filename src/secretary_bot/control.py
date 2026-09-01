@@ -10,8 +10,10 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
+    MenuButtonWebApp,
     Message,
     ReplyKeyboardMarkup,
+    WebAppInfo,
 )
 
 from secretary_bot import texts as ui
@@ -83,6 +85,8 @@ class ControlBot(Protocol):
 
     async def edit_message_reply_markup(self, **kwargs: Any) -> Any: ...
 
+    async def set_chat_menu_button(self, **kwargs: Any) -> Any: ...
+
 
 @dataclass(frozen=True, slots=True)
 class ControlResponse:
@@ -95,6 +99,7 @@ class ControlPlane:
     database: Database
     bot: ControlBot
     bot_username: str = ""
+    public_base_url: str = ""
     delayed_queue: DelayedReplyQueue | None = None
 
     async def handle_message(self, message: Message, *, now: datetime | None = None) -> bool:
@@ -175,6 +180,20 @@ class ControlPlane:
         if response.reply_markup is not None:
             kwargs["reply_markup"] = response.reply_markup
         await self.bot.send_message(**kwargs)
+        if (
+            connection is not None
+            and access is not None
+            and access.can_process
+            and self.public_base_url
+            and (_parse_command(message.text) or (None, ""))[0] == "start"
+        ):
+            await self.bot.set_chat_menu_button(
+                chat_id=message.chat.id,
+                menu_button=MenuButtonWebApp(
+                    text=ui.MENU_SETTINGS,
+                    web_app=WebAppInfo(url=f"{self.public_base_url.rstrip('/')}/app/"),
+                ),
+            )
         if master_notification is not None:
             chat_id, text = master_notification
             await self.bot.send_message(chat_id=chat_id, text=text)
@@ -625,7 +644,17 @@ def _parse_command(text: str | None) -> tuple[str, str] | None:
 
 def _control_intent(text: str, *, state: str) -> tuple[str, str] | None:
     parsed = _parse_command(text)
-    allowed_commands = {"start", "status", "off", "on", "mute", "today", "live"}
+    allowed_commands = {
+        "start",
+        "status",
+        "off",
+        "on",
+        "mute",
+        "today",
+        "live",
+        "users",
+        "invite",
+    }
     if parsed is not None:
         return parsed if parsed[0] in allowed_commands else None
 
@@ -887,14 +916,10 @@ def _main_keyboard(
     muted_until = connection.policy.muted_until
     stopped = connection.policy.kill_switch or (muted_until is not None and now < muted_until)
     power_button = BUTTON_ON if stopped else BUTTON_OFF
-    live_button = BUTTON_LIVE if connection.dry_run else BUTTON_LIVE_ACTIVE
     rows = [
         [KeyboardButton(text=BUTTON_STATUS), KeyboardButton(text=BUTTON_TODAY)],
         [KeyboardButton(text=power_button), KeyboardButton(text=BUTTON_MUTE)],
-        [KeyboardButton(text=live_button)],
     ]
-    if is_master:
-        rows.append([KeyboardButton(text=BUTTON_USERS), KeyboardButton(text=BUTTON_INVITE)])
     return ReplyKeyboardMarkup(
         keyboard=rows,
         resize_keyboard=True,

@@ -20,6 +20,7 @@ BUTTON_USERS_REFRESH = "🔄 Оновити список"
 BUTTON_ADMIN_BACK = "↩️ Головне меню"
 BUTTON_SCOPE_CONFIRMED = "✅ Only Selected Chats налаштовано"
 BUTTON_RECHECK_CONNECTION = "🔄 Перевірити підключення"
+MENU_SETTINGS = "Налаштування"
 
 TIMEZONE_LABELS = {
     "🇺🇦 Київ": "Europe/Kyiv",

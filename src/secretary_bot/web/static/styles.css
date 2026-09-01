@@ -70,6 +70,7 @@ button, label, input, select, textarea { -webkit-tap-highlight-color: transparen
 .status-card strong { display: block; font-size: 19px; letter-spacing: -.02em; }
 .status-card span { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
 .status-card.attention { border-color: rgba(255, 189, 102, .38); }
+.mobile-web-action { display: none; margin: 0 0 18px; }
 
 label { display: grid; gap: 8px; color: #c9d1dc; font-size: 12px; }
 input, select, textarea { width: 100%; border: 1px solid var(--border-strong); border-radius: 11px; padding: 11px 12px; color: var(--text); background: #101925; outline: none; transition: 150ms ease; }
@@ -163,6 +164,7 @@ tbody tr:last-child td { border-bottom: 0; }
   .navigation button { flex: 0 0 auto; width: auto; padding: 9px 11px; }
   .navigation button span { display: none; }
   .sidebar-footer { display: none; }
+  .mobile-web-action { display: flex; }
   .workspace { padding: 22px 14px calc(34px + env(safe-area-inset-bottom)); }
   .topbar { align-items: center; }
   .status-grid { grid-template-columns: repeat(2, 1fr); }

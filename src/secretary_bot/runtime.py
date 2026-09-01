@@ -47,6 +47,8 @@ class TelegramBot(Protocol):
 
     async def edit_message_reply_markup(self, **kwargs: Any) -> Any: ...
 
+    async def set_chat_menu_button(self, **kwargs: Any) -> Any: ...
+
 
 @dataclass(slots=True)
 class RuntimeState:

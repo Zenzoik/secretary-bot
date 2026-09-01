@@ -78,6 +78,19 @@
     }
   }
 
+  async function copyText(value) {
+    if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value);
+    const field = document.createElement("textarea");
+    field.value = value;
+    field.setAttribute("readonly", "");
+    field.style.position = "fixed";
+    field.style.opacity = "0";
+    document.body.append(field);
+    field.select();
+    document.execCommand("copy");
+    field.remove();
+  }
+
   function navigate(view) {
     if (!titles[view]) return;
     state.activeView = view;
@@ -257,7 +270,7 @@
     }); });
     $("#log-filter").elements.action.innerHTML += actions.map((action) => `<option value="${action}">${escapeHtml(actionLabels[action] || action)}</option>`).join("");
     $("#log-filter").addEventListener("submit", (event) => { event.preventDefault(); loadLogs(); });
-    $("#browser-link").addEventListener("click", async () => { try { const result = await api("/api/v1/auth/browser-link", { method: "POST" }); await navigator.clipboard.writeText(result.url); toast("Одноразове посилання скопійовано"); } catch (error) { toast(error.message, true); } });
+    $$(".browser-link-action").forEach((button) => button.addEventListener("click", async () => { try { const result = await api("/api/v1/auth/browser-link", { method: "POST" }); await copyText(result.url); toast("Одноразове посилання скопійовано"); } catch (error) { toast(error.message, true); } }));
     $("#logout").addEventListener("click", async () => { await api("/api/v1/auth/logout", { method: "POST" }); location.reload(); });
   }
 

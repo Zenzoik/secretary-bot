@@ -119,6 +119,7 @@ class FakeBot:
         self.edited: list[dict[str, Any]] = []
         self.read: list[dict[str, Any]] = []
         self.connections: dict[str, BusinessConnection] = {}
+        self.menu_buttons: list[dict[str, Any]] = []
 
     async def get_business_connection(self, connection_id: str) -> BusinessConnection:
         return self.connections[connection_id]
@@ -141,6 +142,10 @@ class FakeBot:
 
     async def edit_message_reply_markup(self, **kwargs: Any) -> bool:
         self.edited.append(kwargs)
+        return True
+
+    async def set_chat_menu_button(self, **kwargs: Any) -> bool:
+        self.menu_buttons.append(kwargs)
         return True
 
 

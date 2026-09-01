@@ -49,6 +49,7 @@ class FakeBot:
         self.sent: list[dict[str, Any]] = []
         self.answered: list[str] = []
         self.edited: list[dict[str, Any]] = []
+        self.menu_buttons: list[dict[str, Any]] = []
 
     async def send_message(self, **kwargs: Any) -> None:
         self.sent.append(kwargs)
@@ -61,6 +62,9 @@ class FakeBot:
 
     async def edit_message_reply_markup(self, **kwargs: Any) -> None:
         self.edited.append(kwargs)
+
+    async def set_chat_menu_button(self, **kwargs: Any) -> None:
+        self.menu_buttons.append(kwargs)
 
 
 class RecordingQueue:
@@ -158,17 +162,18 @@ async def test_start_opens_the_button_control_panel(database: Database) -> None:
     await store_owner(database)
     bot = FakeBot()
 
-    assert await ControlPlane(database, bot).handle_message(owner_message("/start"), now=NOW)
+    assert await ControlPlane(
+        database, bot, public_base_url="https://secretary.example"
+    ).handle_message(owner_message("/start"), now=NOW)
 
     assert keyboard_texts(bot.sent[-1]) == [
         BUTTON_STATUS,
         BUTTON_TODAY,
         BUTTON_OFF,
         BUTTON_MUTE,
-        BUTTON_LIVE,
-        BUTTON_USERS,
-        BUTTON_INVITE,
     ]
+    assert bot.menu_buttons[0]["chat_id"] == 42
+    assert bot.menu_buttons[0]["menu_button"].web_app.url == "https://secretary.example/app/"
 
 
 @pytest.mark.asyncio
@@ -300,10 +305,10 @@ async def test_onboarding_fsm_persists_and_finishes_in_safe_dry_run(
         assert connection is not None
         assert connection.policy.timezone == "Europe/Prague"
         assert len(connection.policy.windows) == 1
-        assert connection.dry_run is True
-        assert connection.policy.kill_switch is False
+    assert connection.dry_run is True
+    assert connection.policy.kill_switch is False
     assert BUTTON_USERS not in keyboard_texts(bot.sent[-1])
-    assert BUTTON_LIVE in keyboard_texts(bot.sent[-1])
+    assert BUTTON_LIVE not in keyboard_texts(bot.sent[-1])
 
 
 @pytest.mark.asyncio
