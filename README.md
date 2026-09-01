@@ -3,6 +3,9 @@
 Пользовательские команды, сценарии и настройки описаны в
 [`README-USER.md`](README-USER.md).
 
+Реализация, API, автоматические доказательства и живой чек-лист Mini App:
+[`docs/stage-3-delivery.md`](docs/stage-3-delivery.md).
+
 Закрытый onboarding заказчиков и мастер-панель описаны в
 [`docs/stage-1.6-onboarding.md`](docs/stage-1.6-onboarding.md).
 
