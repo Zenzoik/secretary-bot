@@ -241,6 +241,10 @@ def test_settings_app_and_assets_are_served_without_exposing_secrets(world) -> N
 
     assert page.status_code == stylesheet.status_code == script.status_code == 200
     assert "Personal Secretary" in page.text
+    assert "Мінімум секретаря, с" in page.text
+    assert "Мінімум власника, с" in page.text
+    assert "Спільний максимум, с" in page.text
+    assert "Мін. затримка власника, с" not in page.text
     assert 'content="http://testserver/assets/og.png"' in page.text
     assert SECRET not in page.text + stylesheet.text + script.text
 

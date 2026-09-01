@@ -80,6 +80,15 @@ input[type="checkbox"], input[type="radio"] { width: auto; }
 .form-grid { display: grid; gap: 14px; margin-top: 20px; }
 .form-grid.two { grid-template-columns: repeat(2, 1fr); }
 .form-grid.three { grid-template-columns: repeat(3, 1fr); }
+.delay-block { max-width: 760px; margin-top: 24px; }
+.delay-copy strong, .delay-copy small { display: block; }
+.delay-copy strong { font-size: 14px; }
+.delay-copy small { max-width: 620px; margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.delay-ranges { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 14px; }
+.delay-ranges div { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 11px; background: #101925; }
+.delay-ranges span { color: var(--muted); font-size: 12px; }
+.delay-ranges strong { font-size: 14px; white-space: nowrap; }
+.delay-block .form-grid { margin-top: 14px; }
 .field-compact { max-width: 320px; margin-bottom: 20px; }
 .segmented { display: grid; grid-template-columns: repeat(2, 1fr); max-width: 620px; padding: 4px; border: 1px solid var(--border); border-radius: 13px; background: #101925; }
 .segmented label { display: block; cursor: pointer; }
@@ -179,7 +188,7 @@ tbody tr:last-child td { border-bottom: 0; }
   .panel { padding: 18px 15px; border-radius: 15px; }
   .panel-heading { display: grid; margin-bottom: 20px; }
   .panel-heading .search { width: 100%; }
-  .form-grid.two, .form-grid.three, .segmented, .direction-card, .filter-bar { grid-template-columns: 1fr; }
+  .form-grid.two, .form-grid.three, .segmented, .direction-card, .filter-bar, .delay-ranges { grid-template-columns: 1fr; }
   .window-row { grid-template-columns: 1fr 1fr; }
   .window-row label:first-child { grid-column: 1 / -1; }
   .tiny-switch { align-self: center; }

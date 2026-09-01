@@ -73,10 +73,20 @@
                 <label><input type="radio" name="sender_identity" value="bot"><span>Від секретаря</span></label>
                 <label><input type="radio" name="sender_identity" value="owner"><span>Від власника</span></label>
               </div>
-              <div class="form-grid three">
-                <label>Мін. затримка власника, с<input name="delay_min_seconds" type="number" min="0" max="3600" required></label>
-                <label>Макс. затримка, с<input name="delay_max_seconds" type="number" min="1" max="3600" required></label>
-                <label>Мін. затримка бота, с<input name="bot_delay_seconds" type="number" min="1" max="60" required></label>
+              <div class="delay-block">
+                <div class="delay-copy">
+                  <strong>Затримка перед відповіддю</strong>
+                  <small>Час обирається випадково: окремий мінімум для кожного відправника та спільний максимум.</small>
+                </div>
+                <div class="delay-ranges" aria-live="polite">
+                  <div><span>Від секретаря</span><strong id="bot-delay-range">—</strong></div>
+                  <div><span>Від власника</span><strong id="owner-delay-range">—</strong></div>
+                </div>
+                <div class="form-grid three">
+                  <label>Мінімум секретаря, с<input name="bot_delay_seconds" type="number" min="1" max="60" required></label>
+                  <label>Мінімум власника, с<input name="delay_min_seconds" type="number" min="0" max="3600" required></label>
+                  <label>Спільний максимум, с<input name="delay_max_seconds" type="number" min="1" max="3600" required></label>
+                </div>
               </div>
               <label class="switch-row"><span><strong>Позначати прочитаним</strong><small>Тільки після успішної відповіді</small></span><input name="mark_read" type="checkbox" role="switch"></label>
               <div class="form-actions"><button class="primary" type="submit">Зберегти доставку</button></div>

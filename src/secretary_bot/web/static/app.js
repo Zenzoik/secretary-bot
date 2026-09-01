@@ -122,6 +122,16 @@
     $(`input[name=sender_identity][value=${data.sender_identity}]`, form).checked = true;
     ["delay_min_seconds", "delay_max_seconds", "bot_delay_seconds"].forEach((name) => { form.elements[name].value = data[name]; });
     form.elements.mark_read.checked = data.mark_read;
+    renderDelayRanges();
+  }
+
+  function renderDelayRanges() {
+    const form = $("#delivery-form");
+    const ownerMin = form.elements.delay_min_seconds.value;
+    const botMin = form.elements.bot_delay_seconds.value;
+    const maximum = form.elements.delay_max_seconds.value;
+    $("#bot-delay-range").textContent = botMin && maximum ? `${botMin}–${maximum} с` : "—";
+    $("#owner-delay-range").textContent = ownerMin && maximum ? `${ownerMin}–${maximum} с` : "—";
   }
 
   function createWindow(container, data = { weekday_mask: 127, time_from: "22:00", time_to: "08:00", is_active: true }) {
@@ -229,6 +239,9 @@
 
   function bindEvents() {
     $$("[data-view]").forEach((button) => button.addEventListener("click", () => navigate(button.dataset.view)));
+    ["delay_min_seconds", "delay_max_seconds", "bot_delay_seconds"].forEach((name) => {
+      $("#delivery-form").elements[name].addEventListener("input", renderDelayRanges);
+    });
     $("#delivery-form").addEventListener("submit", (event) => { event.preventDefault(); submit(event.currentTarget, async () => {
       const form = event.currentTarget;
       state.bootstrap.delivery = await api("/api/v1/delivery", { method: "PUT", body: JSON.stringify({ sender_identity: form.elements.sender_identity.value, delay_min_seconds: Number(form.elements.delay_min_seconds.value), delay_max_seconds: Number(form.elements.delay_max_seconds.value), bot_delay_seconds: Number(form.elements.bot_delay_seconds.value), mark_read: form.elements.mark_read.checked }) });
