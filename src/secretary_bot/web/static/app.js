@@ -110,7 +110,7 @@
     $("#connection-pill span:last-child").textContent = live ? "Live" : connection.dry_run ? "Dry-run" : "Зупинено";
     $("#status-grid").innerHTML = [
       ["Режим", live ? "Live" : connection.dry_run ? "Dry-run" : "Зупинено", live ? "Відповіді активні" : "Перевірте стан"],
-      ["Відправник", delivery.sender_identity === "bot" ? "Секретар" : "Власник", delivery.sender_identity === "bot" ? "З видимою підпискою" : "Без підпису"],
+      ["Відправник", delivery.sender_identity === "bot" ? "Секретар" : "Власник", delivery.sender_identity === "bot" ? "З видимим підписом" : "Без підпису"],
       ["Затримка", delivery.sender_identity === "bot" ? `${delivery.bot_delay_seconds}–${Math.min(delivery.delay_max_seconds, 60)} с` : `${delivery.delay_min_seconds}–${delivery.delay_max_seconds} с`, "Випадковий інтервал"],
       ["Права", rights.can_reply ? (rights.can_read_messages ? "Відповідь + читання" : "Тільки відповідь") : "Немає відповіді", rights.can_reply ? "Telegram Business" : "Потрібна увага"],
     ].map(([label, value, note], index) => `<article class="status-card ${index === 3 && !rights.can_reply ? "attention" : ""}"><small>${label}</small><strong>${value}</strong><span>${note}</span></article>`).join("");
