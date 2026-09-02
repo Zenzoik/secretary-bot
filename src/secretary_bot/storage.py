@@ -20,6 +20,8 @@ from secretary_bot import models
 from secretary_bot.actions import LogAction
 from secretary_bot.classifier import ClassifierSettings
 from secretary_bot.gate import ConnectionPolicy, ContactState, Exclusion, QuietWindow
+from secretary_bot.retention import MessageCipher, MessageContext
+from secretary_bot.summary import DialogueMessage, RetainedDialogue
 from secretary_bot.templates import TemplateCode
 
 
@@ -827,6 +829,72 @@ async def purge_retained_messages(session: AsyncSession, *, connection_id: int) 
         )
     )
     return result.rowcount or 0
+
+
+async def load_retained_dialogues(
+    session: AsyncSession,
+    *,
+    connection_id: int,
+    period_start: datetime,
+    period_end: datetime,
+    now: datetime,
+    cipher: MessageCipher,
+) -> list[RetainedDialogue]:
+    """Decrypt active retained rows in memory, grouped by dialogue and time."""
+    rows = list(
+        await session.scalars(
+            select(models.MessageLog)
+            .where(
+                models.MessageLog.connection_id == connection_id,
+                models.MessageLog.action == LogAction.CAPTURED.value,
+                models.MessageLog.deleted_by_user.is_(False),
+                models.MessageLog.body_encrypted.is_not(None),
+                models.MessageLog.retention_until > now,
+                models.MessageLog.occurred_at >= period_start,
+                models.MessageLog.occurred_at < period_end,
+            )
+            .order_by(
+                models.MessageLog.contact_id,
+                models.MessageLog.occurred_at,
+                models.MessageLog.id,
+            )
+        )
+    )
+    grouped: dict[int, list[DialogueMessage]] = {}
+    for row in rows:
+        assert row.body_encrypted is not None
+        context = MessageContext(
+            connection_id=row.connection_id,
+            contact_id=row.contact_id,
+            tg_message_id=row.tg_message_id,
+            direction=row.direction,
+        )
+        grouped.setdefault(row.contact_id, []).append(
+            DialogueMessage(
+                direction=row.direction,
+                occurred_at=row.occurred_at,
+                text=cipher.decrypt(row.body_encrypted, context=context),
+                tg_message_id=row.tg_message_id,
+            )
+        )
+    if not grouped:
+        return []
+
+    activity_rows = await session.scalars(
+        select(models.ContactActivity).where(
+            models.ContactActivity.connection_id == connection_id,
+            models.ContactActivity.contact_id.in_(grouped),
+        )
+    )
+    names = {row.contact_id: row.contact_name for row in activity_rows}
+    return [
+        RetainedDialogue(
+            contact_id=contact_id,
+            contact_name=names.get(contact_id),
+            messages=tuple(messages),
+        )
+        for contact_id, messages in grouped.items()
+    ]
 
 
 async def record_incoming(

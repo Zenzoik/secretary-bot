@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from anthropic import AsyncAnthropic
 
 from secretary_bot.classifier import CLASSIFICATION_SCHEMA, MAX_OUTPUT_TOKENS
+from secretary_bot.summary import SUMMARY_OUTPUT_TOKENS, SUMMARY_SCHEMA
 
 
 @dataclass(slots=True)
@@ -24,6 +25,18 @@ class AnthropicLanguageModel:
             system=system_prompt,
             messages=[{"role": "user", "content": text}],
             output_config={"format": {"type": "json_schema", "schema": CLASSIFICATION_SCHEMA}},
+        )
+        return next(block.text for block in response.content if block.type == "text")
+
+    async def summarize_dialogue(
+        self, transcript: str, *, system_prompt: str, model: str
+    ) -> str:
+        response = await self.client.messages.create(
+            model=model,
+            max_tokens=SUMMARY_OUTPUT_TOKENS,
+            system=system_prompt,
+            messages=[{"role": "user", "content": transcript}],
+            output_config={"format": {"type": "json_schema", "schema": SUMMARY_SCHEMA}},
         )
         return next(block.text for block in response.content if block.type == "text")
 

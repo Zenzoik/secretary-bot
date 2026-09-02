@@ -11,6 +11,7 @@ from secretary_bot.retention import MESSAGE_RETENTION, MessageCipher, MessageCon
 from secretary_bot.storage import (
     capture_message,
     delete_expired_messages,
+    load_retained_dialogues,
     log_decision,
     purge_retained_messages,
 )
@@ -141,3 +142,49 @@ async def test_cleanup_is_bounded_and_purge_is_connection_scoped(session) -> Non
     remaining = await session.scalar(select(func.count()).select_from(models.MessageLog))
 
     assert remaining == 1
+
+
+@pytest.mark.asyncio
+async def test_retained_dialogues_only_include_active_rows_inside_period(session) -> None:
+    connection_id = await add_connection(session)
+    cipher = MessageCipher.from_encoded_key(MessageCipher.generate_encoded_key())
+    session.add(
+        models.ContactActivity(
+            connection_id=connection_id,
+            contact_id=200,
+            contact_name="Контакт",
+        )
+    )
+    for message_id, direction, text, occurred_at, retention_until in (
+        (10, "in", "Питання", NOW - timedelta(hours=2), NOW + timedelta(hours=46)),
+        (11, "out", "Відповідь", NOW - timedelta(hours=1), NOW + timedelta(hours=47)),
+        (12, "in", "Застаріле", NOW - timedelta(days=2), NOW - timedelta(seconds=1)),
+    ):
+        encrypted = cipher.encrypt(
+            text,
+            context=MessageContext(connection_id, 200, message_id, direction),
+        )
+        await capture_message(
+            session,
+            connection_id=connection_id,
+            contact_id=200,
+            tg_message_id=message_id,
+            direction=direction,
+            occurred_at=occurred_at,
+            body_encrypted=encrypted,
+            retention_until=retention_until,
+        )
+
+    dialogues = await load_retained_dialogues(
+        session,
+        connection_id=connection_id,
+        period_start=NOW - timedelta(days=1),
+        period_end=NOW,
+        now=NOW,
+        cipher=cipher,
+    )
+
+    assert len(dialogues) == 1
+    assert dialogues[0].contact_name == "Контакт"
+    assert [message.text for message in dialogues[0].messages] == ["Питання", "Відповідь"]
+    assert dialogues[0].last_incoming_message_id == 10

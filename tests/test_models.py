@@ -18,6 +18,8 @@ EXPECTED_TABLES = {
     "prompts",
     "schedules",
     "shadow_feedback",
+    "summary_items",
+    "summary_runs",
     "templates",
     "web_sessions",
 }
@@ -41,6 +43,7 @@ def test_tenant_tables_cascade_from_connection() -> None:
         "access_users",
         "connections",
         "shadow_feedback",
+        "summary_items",
         "web_sessions",
     }
 

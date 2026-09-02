@@ -370,6 +370,53 @@ class MorningQueue(Base):
     is_done: Mapped[bool] = mapped_column(Boolean, server_default=sql_text("false"))
 
 
+class SummaryRun(Base):
+    __tablename__ = "summary_runs"
+    __table_args__ = (
+        CheckConstraint("status IN ('pending', 'delivered', 'error')", name="status_values"),
+        UniqueConstraint("connection_id", "period_start", "period_end"),
+        Index("ix_summary_runs_connection_period", "connection_id", "period_end"),
+    )
+
+    id: Mapped[int] = mapped_column(SURROGATE_KEY, primary_key=True, autoincrement=True)
+    connection_id: Mapped[int] = mapped_column(
+        ForeignKey("connections.id", ondelete="CASCADE"), index=True
+    )
+    period_start: Mapped[datetime] = mapped_column(UtcDateTime())
+    period_end: Mapped[datetime] = mapped_column(UtcDateTime())
+    status: Mapped[str] = mapped_column(Text, server_default=sql_text("'pending'"))
+    destination_chat_id: Mapped[int | None] = mapped_column(BigInteger)
+    telegram_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    delivered_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
+    error_code: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
+
+
+class SummaryItem(Base):
+    __tablename__ = "summary_items"
+    __table_args__ = (UniqueConstraint("run_id", "contact_id"),)
+
+    id: Mapped[int] = mapped_column(SURROGATE_KEY, primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("summary_runs.id", ondelete="CASCADE"), index=True
+    )
+    contact_id: Mapped[int] = mapped_column(BigInteger)
+    contact_name: Mapped[str | None] = mapped_column(Text)
+    topic: Mapped[str] = mapped_column(Text)
+    agreements_json: Mapped[list[str]] = mapped_column(
+        JSON_DOCUMENT, server_default=sql_text("'[]'"), default=list
+    )
+    open_questions_json: Mapped[list[str]] = mapped_column(
+        JSON_DOCUMENT, server_default=sql_text("'[]'"), default=list
+    )
+    questions_asked: Mapped[int] = mapped_column(Integer, server_default=sql_text("0"))
+    questions_closed: Mapped[int] = mapped_column(Integer, server_default=sql_text("0"))
+    last_incoming_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    telegram_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    resolved_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
+
+
 class ShadowFeedback(Base):
     __tablename__ = "shadow_feedback"
     __table_args__ = (
