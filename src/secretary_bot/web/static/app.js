@@ -66,7 +66,8 @@
     button.disabled = true;
     button.textContent = "Зберігаємо…";
     try {
-      await callback();
+      const saved = await callback();
+      if (saved === false) return;
       toast("Збережено");
       tg?.HapticFeedback?.notificationOccurred?.("success");
     } catch (error) {
@@ -186,8 +187,16 @@
 
   function fillSummary() {
     const form = $("#summary-form");
-    form.elements.summary_time.value = state.bootstrap.summary.summary_time;
-    form.elements.summary_channel_id.value = state.bootstrap.summary.summary_channel_id ?? "";
+    const data = state.bootstrap.summary;
+    form.elements.summary_time.value = data.summary_time;
+    form.elements.summary_channel_id.value = data.summary_channel_id ?? "";
+    form.elements.message_retention_enabled.checked = data.message_retention_enabled;
+    $("#retention-badge").textContent = data.message_retention_enabled ? "Зашифровано · 48 год" : "Вимкнено";
+    $("#retention-badge").classList.toggle("neutral", !data.message_retention_enabled);
+    const size = data.retained_bytes < 1024 ? `${data.retained_bytes} Б` : `${(data.retained_bytes / 1024).toFixed(1)} КБ`;
+    $("#retention-stats").textContent = data.message_retention_enabled
+      ? `Збережено повідомлень: ${data.retained_message_count} · зашифрований обсяг: ${size}${data.next_deletion_at ? ` · найближче видалення ${formatDate(data.next_deletion_at)}` : ""}`
+      : "Тексти повідомлень не зберігаються.";
   }
 
   async function loadContacts() {
@@ -279,7 +288,22 @@
     }); });
     $("#summary-form").addEventListener("submit", (event) => { event.preventDefault(); submit(event.currentTarget, async () => {
       const form = event.currentTarget;
-      state.bootstrap.summary = await api("/api/v1/summary", { method: "PUT", body: JSON.stringify({ summary_time: form.elements.summary_time.value, summary_channel_id: form.elements.summary_channel_id.value ? Number(form.elements.summary_channel_id.value) : null }) });
+      const enableRetention = form.elements.message_retention_enabled.checked;
+      if (enableRetention && !state.bootstrap.summary.message_retention_enabled) {
+        const accepted = window.confirm("Увімкнути зашифроване зберігання текстів повідомлень на строк до 48 годин для формування добового самарі?");
+        if (!accepted) {
+          form.elements.message_retention_enabled.checked = false;
+          toast("Зберігання залишилось вимкненим");
+          return false;
+        }
+      }
+      try {
+        state.bootstrap.summary = await api("/api/v1/summary", { method: "PUT", body: JSON.stringify({ summary_time: form.elements.summary_time.value, summary_channel_id: form.elements.summary_channel_id.value ? Number(form.elements.summary_channel_id.value) : null, message_retention_enabled: enableRetention }) });
+      } catch (error) {
+        form.elements.message_retention_enabled.checked = state.bootstrap.summary.message_retention_enabled;
+        throw error;
+      }
+      fillSummary();
     }); });
     $("#log-filter").elements.action.innerHTML += actions.map((action) => `<option value="${action}">${escapeHtml(actionLabels[action] || action)}</option>`).join("");
     $("#log-filter").addEventListener("submit", (event) => { event.preventDefault(); loadLogs(); });

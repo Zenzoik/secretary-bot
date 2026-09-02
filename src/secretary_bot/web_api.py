@@ -21,7 +21,7 @@ from secretary_bot.classifier import (
     MONEY_KEYWORDS,
 )
 from secretary_bot.config import Settings
-from secretary_bot.storage import Database, set_delivery_preferences
+from secretary_bot.storage import Database, purge_retained_messages, set_delivery_preferences
 from secretary_bot.templates import DEFAULT_TEMPLATES, TemplateCode
 from secretary_bot.web_auth import (
     EXCHANGE_TTL,
@@ -144,6 +144,7 @@ class ClassifierPayload(BaseModel):
 class SummaryPayload(BaseModel):
     summary_time: time
     summary_channel_id: int | None = None
+    message_retention_enabled: bool | None = None
 
     @field_validator("summary_channel_id")
     @classmethod
@@ -369,10 +370,23 @@ def build_web_router(*, database: Database, settings: Settings) -> APIRouter:
     async def update_summary(request: Request, payload: SummaryPayload) -> dict[str, Any]:
         async with database.session() as session, session.begin():
             principal = await api.authorize(session, request)
+            if payload.message_retention_enabled and settings.message_encryption_key is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="На сервері не налаштовано ключ шифрування",
+                )
             principal.connection.summary_time = payload.summary_time
             principal.connection.summary_channel_id = payload.summary_channel_id
+            if payload.message_retention_enabled is not None:
+                if not payload.message_retention_enabled:
+                    await purge_retained_messages(
+                        session, connection_id=principal.connection.id
+                    )
+                principal.connection.message_retention_enabled = (
+                    payload.message_retention_enabled
+                )
             await session.flush()
-            return _summary(principal.connection)
+            return await _summary(session, principal.connection)
 
     @router.get("/api/v1/logs")
     async def logs(
@@ -380,7 +394,9 @@ def build_web_router(*, database: Database, settings: Settings) -> APIRouter:
         contact_id: Annotated[int | None, Query(gt=0)] = None,
         action: str | None = None,
     ) -> dict[str, Any]:
-        if action is not None and action not in {item.value for item in LogAction}:
+        if action is not None and action not in {
+            item.value for item in LogAction if item is not LogAction.CAPTURED
+        }:
             raise HTTPException(status_code=422, detail="Невідома дія")
         async with database.session() as session, session.begin():
             principal = await api.authorize(session, request)
@@ -457,7 +473,7 @@ async def _bootstrap(session: AsyncSession, principal: Principal) -> dict[str, A
         "schedule": await _schedule(session, principal.connection),
         "templates": await _templates(session, principal.connection.id),
         "classifier": await _classifier(session, principal.connection.id),
-        "summary": _summary(principal.connection),
+        "summary": await _summary(session, principal.connection),
     }
 
 
@@ -528,10 +544,27 @@ async def _classifier(session: AsyncSession, connection_id: int) -> dict[str, An
     }
 
 
-def _summary(connection: models.Connection) -> dict[str, Any]:
+async def _summary(session: AsyncSession, connection: models.Connection) -> dict[str, Any]:
+    retained = (
+        await session.execute(
+            select(
+                func.count(models.MessageLog.id),
+                func.coalesce(func.sum(func.length(models.MessageLog.body_encrypted)), 0),
+                func.min(models.MessageLog.retention_until),
+            ).where(
+                models.MessageLog.connection_id == connection.id,
+                models.MessageLog.action == LogAction.CAPTURED.value,
+            )
+        )
+    ).one()
     return {
         "summary_time": connection.summary_time.isoformat(timespec="minutes"),
         "summary_channel_id": connection.summary_channel_id,
+        "message_retention_enabled": connection.message_retention_enabled,
+        "retention_hours": 48,
+        "retained_message_count": retained[0],
+        "retained_bytes": retained[1],
+        "next_deletion_at": _iso(retained[2]),
     }
 
 
@@ -655,6 +688,7 @@ async def _logs(
     query = select(models.MessageLog).where(
         models.MessageLog.connection_id == connection_id,
         models.MessageLog.occurred_at >= datetime.now(UTC) - LOG_RETENTION,
+        models.MessageLog.action != LogAction.CAPTURED.value,
     )
     if contact_id is not None:
         query = query.where(models.MessageLog.contact_id == contact_id)

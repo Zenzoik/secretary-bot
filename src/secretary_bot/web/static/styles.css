@@ -141,6 +141,8 @@ fieldset input[type="datetime-local"] { grid-column: 1 / -1; }
 .direction-card .keywords { grid-column: 1 / -1; }
 .direction-card .switch-row { grid-column: 1 / -1; margin: 0; max-width: none; }
 .neutral { color: var(--warning); }
+.retention-switch { max-width: none; }
+.retention-stats { min-height: 18px; margin: 10px 0 22px; color: var(--muted); font-size: 12px; }
 .filter-bar { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; margin-bottom: 20px; }
 .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; }
 table { width: 100%; border-collapse: collapse; min-width: 720px; }

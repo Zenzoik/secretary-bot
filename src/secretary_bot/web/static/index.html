@@ -160,8 +160,10 @@
 
           <section class="view" data-view-panel="summary">
             <form class="panel narrow" id="summary-form">
-              <div class="panel-heading"><div><p class="eyebrow">Наступний етап</p><h2>Щоденне самарі</h2></div><span class="badge neutral">Підготовлено</span></div>
-              <p class="muted">Час і канал уже зберігаються. Публікацію ввімкнемо після окремого підтвердження зберігання повідомлень.</p>
+              <div class="panel-heading"><div><p class="eyebrow">Зберігання та доставка</p><h2>Щоденне самарі</h2></div><span class="badge neutral" id="retention-badge">Вимкнено</span></div>
+              <p class="muted">Для самарі бот тимчасово зберігає лише тексти повідомлень. Тексти зашифровані окремим ключем і автоматично видаляються не пізніше ніж через 48 годин.</p>
+              <label class="switch-row retention-switch"><span><strong>Зберігати тексти для самарі</strong><small>Вимкнення одразу видалить усі збережені тексти. Відповіді бота продовжать працювати.</small></span><input name="message_retention_enabled" type="checkbox" role="switch" aria-describedby="retention-stats"></label>
+              <p class="retention-stats" id="retention-stats" aria-live="polite"></p>
               <label>Локальний час<input name="summary_time" type="time" required></label>
               <label>Telegram channel ID<input name="summary_channel_id" type="number" placeholder="-1001234567890"><small>Числовий ID приватного каналу, де бот є адміністратором.</small></label>
               <div class="form-actions"><button class="primary" type="submit">Зберегти самарі</button></div>

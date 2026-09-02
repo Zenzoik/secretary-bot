@@ -9,11 +9,13 @@ from urllib.parse import urlencode, urlparse
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import func, select
 
 from secretary_bot import models
 from secretary_bot.actions import LogAction
 from secretary_bot.config import Settings
 from secretary_bot.gate import GateDecision, evaluate_gate
+from secretary_bot.retention import MessageCipher
 from secretary_bot.storage import (
     ConnectionSnapshot,
     Database,
@@ -46,7 +48,7 @@ def headers(user_id: int = 42) -> dict[str, str]:
     return {"X-Telegram-Init-Data": signed_init_data(user_id)}
 
 
-def web_app(database: Database) -> FastAPI:
+def web_app(database: Database, *, message_encryption_key: str | None = None) -> FastAPI:
     app = FastAPI()
     settings = Settings(
         bot_token=TOKEN,
@@ -54,6 +56,7 @@ def web_app(database: Database) -> FastAPI:
         master_user_id=42,
         bot_username="secretary_test_bot",
         public_base_url="https://testserver",
+        message_encryption_key=message_encryption_key,
     )
     app.include_router(build_web_router(database=database, settings=settings))
     return app
@@ -186,12 +189,69 @@ async def test_delivery_schedule_templates_classifier_and_summary_apply_immediat
     assert templates.json()["money_priority"] == "Оплату побачив"
     assert classifier.json()["directions"][1]["keywords"] == ["гонорар"]
     assert summary.json()["summary_channel_id"] == -1001234567890
+    assert summary.json()["message_retention_enabled"] is False
     async with database.session() as session:
         connection = await load_owner_connection(session, 42)
         assert connection is not None
         assert connection.sender_identity == "owner"
         assert connection.policy.timezone == "Europe/Prague"
         assert connection.policy.windows[0].weekday_mask == 31
+
+
+@pytest.mark.asyncio
+async def test_summary_retention_requires_key_reports_usage_and_purges_on_disable(
+    database: Database,
+) -> None:
+    connection_id = await seed_owner(database)
+    payload = {
+        "summary_time": "09:00",
+        "summary_channel_id": -1001234567890,
+        "message_retention_enabled": True,
+    }
+    transport = ASGITransport(app=web_app(database))
+    async with AsyncClient(transport=transport, base_url="https://testserver") as client:
+        missing_key = await client.put("/api/v1/summary", headers=headers(), json=payload)
+
+    assert missing_key.status_code == 409
+    assert "ключ" in missing_key.json()["detail"]
+
+    key = MessageCipher.generate_encoded_key()
+    transport = ASGITransport(app=web_app(database, message_encryption_key=key))
+    async with AsyncClient(transport=transport, base_url="https://testserver") as client:
+        enabled = await client.put("/api/v1/summary", headers=headers(), json=payload)
+        async with database.session() as session, session.begin():
+            session.add(
+                models.MessageLog(
+                    connection_id=connection_id,
+                    contact_id=100,
+                    tg_message_id=7,
+                    direction="in",
+                    action=LogAction.CAPTURED.value,
+                    body_encrypted=b"encrypted-body",
+                    retention_until=NOW + timedelta(hours=48),
+                )
+            )
+        usage = await client.get("/api/v1/bootstrap", headers=headers())
+        disabled = await client.put(
+            "/api/v1/summary",
+            headers=headers(),
+            json={**payload, "message_retention_enabled": False},
+        )
+
+    assert enabled.status_code == 200
+    assert enabled.json()["message_retention_enabled"] is True
+    assert enabled.json()["retention_hours"] == 48
+    assert usage.json()["summary"]["retained_message_count"] == 1
+    assert usage.json()["summary"]["retained_bytes"] == len(b"encrypted-body")
+    assert disabled.json()["message_retention_enabled"] is False
+    assert disabled.json()["retained_message_count"] == 0
+    async with database.session() as session:
+        retained = await session.scalar(
+            select(func.count())
+            .select_from(models.MessageLog)
+            .where(models.MessageLog.action == LogAction.CAPTURED.value)
+        )
+    assert retained == 0
 
 
 @pytest.mark.asyncio
@@ -260,15 +320,29 @@ async def test_log_is_limited_to_30_days_and_filters_without_message_bodies(
             action=LogAction.ERROR,
             occurred_at=NOW - timedelta(days=31),
         )
+        session.add(
+            models.MessageLog(
+                connection_id=connection_id,
+                contact_id=100,
+                direction="in",
+                action=LogAction.CAPTURED.value,
+                body_encrypted=b"ciphertext",
+                retention_until=NOW + timedelta(hours=48),
+            )
+        )
 
     transport = ASGITransport(app=web_app(database))
     async with AsyncClient(transport=transport, base_url="https://testserver") as client:
         response = await client.get("/api/v1/logs?contact_id=100&action=replied", headers=headers())
+        unfiltered = await client.get("/api/v1/logs", headers=headers())
+        captured = await client.get("/api/v1/logs?action=captured", headers=headers())
 
     assert response.status_code == 200
     assert len(response.json()["items"]) == 1
     assert response.json()["items"][0]["contact_id"] == 100
     assert "body" not in response.text
+    assert [item["action"] for item in unfiltered.json()["items"]] == ["replied"]
+    assert captured.status_code == 422
 
 
 @pytest.mark.asyncio
