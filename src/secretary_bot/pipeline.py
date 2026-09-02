@@ -17,10 +17,12 @@ from secretary_bot.delayed import MAX_DELAY_SECONDS, DelayedReplyQueue, ReplyTas
 from secretary_bot.gate import GateDecision, evaluate_gate
 from secretary_bot.hard_filter import HardFilterResult
 from secretary_bot.notifications import OwnerNotifier, Preview
+from secretary_bot.retention import MESSAGE_RETENTION, MessageCipher, MessageContext
 from secretary_bot.sender import BusinessReplySender, SendOutcome
 from secretary_bot.storage import (
     ConnectionRecord,
     Database,
+    capture_message,
     claim_window,
     deactivate_connection,
     enqueue_morning,
@@ -68,6 +70,7 @@ class Pipeline:
     model: LanguageModel | None = None
     classifier_defaults: ClassifierSettings = field(default_factory=ClassifierSettings)
     rng: random.Random | None = None
+    message_cipher: MessageCipher | None = None
 
     async def process_incoming(self, incoming: IncomingMessage) -> None:
         """Steps 1–4 of §4: filter, gate, classify, then wait out the delay."""
@@ -86,6 +89,11 @@ class Pipeline:
                 await record_owner_reply(
                     session, connection.id, incoming.contact_id, at=incoming.received_at
                 )
+                contact = await load_contact_state(session, connection.id, incoming.contact_id)
+                if contact.exclusion is None or not contact.exclusion.covers(incoming.received_at):
+                    await self._capture_incoming(
+                        session, connection, incoming, direction="out"
+                    )
                 return
             if incoming.filter_result is HardFilterResult.UNSUPPORTED_CONTENT:
                 await record_incoming(
@@ -112,6 +120,12 @@ class Pipeline:
             )
             contact = await load_contact_state(session, connection.id, incoming.contact_id)
             gate = evaluate_gate(connection.policy, contact, now=incoming.received_at)
+            if gate.decision not in {
+                GateDecision.SKIPPED_INACTIVE,
+                GateDecision.SKIPPED_KILL_SWITCH,
+                GateDecision.SKIPPED_EXCLUDED,
+            }:
+                await self._capture_incoming(session, connection, incoming, direction="in")
             if gate.decision is not GateDecision.ALLOWED:
                 await self._log(session, connection, incoming, LogAction(gate.decision.value))
                 return
@@ -222,6 +236,15 @@ class Pipeline:
                     direction="out",
                     tg_message_id=result.message_id,
                 )
+                await self._capture_text(
+                    session,
+                    connection,
+                    contact_id=task.contact_id,
+                    tg_message_id=result.message_id,
+                    direction="out",
+                    occurred_at=at,
+                    text=text,
+                )
                 await self._flag_money(session, connection, task)
 
         if result.outcome is SendOutcome.CONNECTION_INVALID:
@@ -291,6 +314,73 @@ class Pipeline:
             _log(logging.ERROR, "alert_undeliverable", connection_id=connection.id)
             return
         await self.notifier.alert(connection.owner_chat_id, text)
+
+    async def _capture_incoming(
+        self,
+        session: AsyncSession,
+        connection: ConnectionRecord,
+        incoming: IncomingMessage,
+        *,
+        direction: str,
+    ) -> None:
+        await self._capture_text(
+            session,
+            connection,
+            contact_id=incoming.contact_id,
+            tg_message_id=incoming.message_id,
+            direction=direction,
+            occurred_at=incoming.received_at,
+            text=incoming.text,
+        )
+
+    async def _capture_text(
+        self,
+        session: AsyncSession,
+        connection: ConnectionRecord,
+        *,
+        contact_id: int,
+        tg_message_id: int | None,
+        direction: str,
+        occurred_at: datetime,
+        text: str,
+    ) -> None:
+        if not connection.message_retention_enabled or not text:
+            return
+        if self.message_cipher is None:
+            _log(
+                logging.ERROR,
+                "message_retention_key_missing",
+                connection_id=connection.id,
+                contact_id=contact_id,
+            )
+            return
+        context = MessageContext(
+            connection_id=connection.id,
+            contact_id=contact_id,
+            tg_message_id=tg_message_id,
+            direction=direction,
+        )
+        try:
+            encrypted = self.message_cipher.encrypt(text, context=context)
+        except ValueError as exc:
+            _log(
+                logging.WARNING,
+                "message_retention_skipped",
+                connection_id=connection.id,
+                contact_id=contact_id,
+                reason=str(exc),
+            )
+            return
+        await capture_message(
+            session,
+            connection_id=connection.id,
+            contact_id=contact_id,
+            tg_message_id=tg_message_id,
+            direction=direction,
+            occurred_at=occurred_at,
+            body_encrypted=encrypted,
+            retention_until=occurred_at + MESSAGE_RETENTION,
+        )
 
     async def _log(
         self,

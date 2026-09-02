@@ -30,6 +30,7 @@ from secretary_bot.llm import AnthropicLanguageModel
 from secretary_bot.morning import MorningDigest
 from secretary_bot.notifications import OwnerNotifier, TelegramOwnerNotifier
 from secretary_bot.pipeline import Pipeline
+from secretary_bot.retention import MessageCipher
 from secretary_bot.runtime import RuntimeState, TelegramBot, process_updates
 from secretary_bot.sender import BusinessReplySender
 from secretary_bot.storage import Database, ensure_master
@@ -71,6 +72,11 @@ def create_app(
         notifier=notifier or TelegramOwnerNotifier(bot=telegram_bot),
         model=language_model,
         classifier_defaults=ClassifierSettings(timeout_seconds=settings.classifier_timeout_seconds),
+        message_cipher=(
+            None
+            if settings.message_encryption_key is None
+            else MessageCipher.from_encoded_key(settings.message_encryption_key)
+        ),
     )
     digest = MorningDigest(
         database=connection_database, notifier=notifier or TelegramOwnerNotifier(bot=telegram_bot)

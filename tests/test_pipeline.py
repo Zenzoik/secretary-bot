@@ -15,6 +15,7 @@ from secretary_bot.delayed import DelayedReplyQueue, ReplyTask
 from secretary_bot.hard_filter import HardFilterResult
 from secretary_bot.notifications import Preview
 from secretary_bot.pipeline import IncomingMessage, Pipeline
+from secretary_bot.retention import MESSAGE_RETENTION, MessageCipher, MessageContext
 from secretary_bot.sender import BusinessReplySender
 from secretary_bot.storage import (
     ConnectionSnapshot,
@@ -496,3 +497,92 @@ async def test_no_message_body_is_ever_written_to_the_database(world) -> None:
             rows = (await session.execute(select(table))).mappings().all()
             for row in rows:
                 assert secret not in " ".join(str(value) for value in row.values())
+
+
+@pytest.mark.asyncio
+async def test_opt_in_retention_encrypts_incoming_and_sent_text(world) -> None:
+    pipeline, bot, _, database = world
+    cipher = MessageCipher.from_encoded_key(MessageCipher.generate_encoded_key())
+    pipeline.message_cipher = cipher
+    await set_connection(database, dry_run=False, message_retention_enabled=True)
+    secret = "секретный вопрос об оплате"
+
+    await pipeline.process_incoming(message(text=secret))
+    await pipeline.deliver((await scheduled(pipeline))[0], now=NIGHT + timedelta(minutes=1))
+
+    async with database.session() as session:
+        retained = list(
+            await session.scalars(
+                select(models.MessageLog)
+                .where(models.MessageLog.action == LogAction.CAPTURED.value)
+                .order_by(models.MessageLog.id)
+            )
+        )
+    assert len(retained) == 2
+    assert secret.encode() not in retained[0].body_encrypted
+    assert retained[0].retention_until == NIGHT + MESSAGE_RETENTION
+    assert retained[1].retention_until == NIGHT + timedelta(minutes=1) + MESSAGE_RETENTION
+    assert cipher.decrypt(
+        retained[0].body_encrypted,
+        context=MessageContext(1, 100, 7, "in"),
+    ) == secret
+    assert cipher.decrypt(
+        retained[1].body_encrypted,
+        context=MessageContext(1, 100, 999, "out"),
+    ) == bot.sent[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_retention_without_a_key_does_not_interrupt_replies(world) -> None:
+    pipeline, bot, _, database = world
+    await set_connection(database, dry_run=False, message_retention_enabled=True)
+
+    await pipeline.process_incoming(message())
+    result = await pipeline.deliver((await scheduled(pipeline))[0], now=NIGHT)
+
+    assert result is LogAction.REPLIED
+    assert len(bot.sent) == 1
+    async with database.session() as session:
+        retained = await session.scalar(
+            select(func.count())
+            .select_from(models.MessageLog)
+            .where(models.MessageLog.action == LogAction.CAPTURED.value)
+        )
+    assert retained == 0
+
+
+@pytest.mark.asyncio
+async def test_owner_reply_is_retained_but_excluded_contact_is_not(world) -> None:
+    pipeline, _, _, database = world
+    cipher = MessageCipher.from_encoded_key(MessageCipher.generate_encoded_key())
+    pipeline.message_cipher = cipher
+    await set_connection(database, message_retention_enabled=True)
+
+    await pipeline.process_incoming(
+        message(filter_result=HardFilterResult.OWNER_MESSAGE, text="ручной ответ")
+    )
+    async with database.session() as session, session.begin():
+        session.add(models.Exclusion(connection_id=1, contact_id=101))
+    await pipeline.process_incoming(
+        message(
+            chat_id=101,
+            filter_result=HardFilterResult.ALLOWED,
+            text="не сохранять",
+            message_id=9,
+        )
+    )
+
+    async with database.session() as session:
+        retained = list(
+            await session.scalars(
+                select(models.MessageLog).where(
+                    models.MessageLog.action == LogAction.CAPTURED.value
+                )
+            )
+        )
+    assert len(retained) == 1
+    assert retained[0].direction == "out"
+    assert cipher.decrypt(
+        retained[0].body_encrypted,
+        context=MessageContext(1, 100, 7, "out"),
+    ) == "ручной ответ"
