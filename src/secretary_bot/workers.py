@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from secretary_bot.delayed import DelayedReplyQueue
 from secretary_bot.morning import MorningDigest
 from secretary_bot.pipeline import Pipeline
+from secretary_bot.storage import Database, delete_expired_messages
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,7 @@ DELAYED_POLL_SECONDS = 1.0
 MORNING_POLL_SECONDS = 60.0
 DELIVERY_RETRY_SECONDS = 5
 MAX_DELIVERY_ATTEMPTS = 3
+RETENTION_CLEANUP_SECONDS = 600.0
 
 
 async def deliver_due_once(
@@ -82,3 +84,30 @@ async def run_morning_digest(
         except Exception as exc:
             logger.error("morning digest worker failed: %s", type(exc).__name__)
         await asyncio.sleep(interval)
+
+
+async def cleanup_retention_once(
+    database: Database, *, now: datetime | None = None, batch_size: int = 1000
+) -> int:
+    """Delete expired encrypted bodies and commit one bounded batch."""
+    async with database.session() as session, session.begin():
+        return await delete_expired_messages(
+            session, now=now or datetime.now(UTC), batch_size=batch_size
+        )
+
+
+async def run_retention_cleanup(
+    database: Database, *, interval: float = RETENTION_CLEANUP_SECONDS
+) -> None:
+    while True:
+        # Starting with a wait avoids racing the startup transaction and keeps
+        # shutdown cancellation independent from an in-flight database session.
+        await asyncio.sleep(interval)
+        try:
+            deleted = await cleanup_retention_once(database)
+            if deleted:
+                logger.info("expired retained messages deleted: count=%s", deleted)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("retention cleanup worker failed: %s", type(exc).__name__)

@@ -6,8 +6,14 @@ from datetime import timedelta
 
 import pytest
 
+from secretary_bot import models
+from secretary_bot.actions import LogAction
 from secretary_bot.delayed import DelayedReplyQueue, ReplyTask
-from secretary_bot.workers import DELIVERY_RETRY_SECONDS, deliver_due_once
+from secretary_bot.workers import (
+    DELIVERY_RETRY_SECONDS,
+    cleanup_retention_once,
+    deliver_due_once,
+)
 from tests.test_delayed import NOW, TASK, FakeSortedSet
 
 
@@ -72,3 +78,26 @@ async def test_shutdown_returns_the_entire_claimed_batch_to_redis() -> None:
         await deliver_due_once(pipeline, queue, now=NOW)
 
     assert await queue.pending() == 2
+
+
+@pytest.mark.asyncio
+async def test_retention_worker_commits_cleanup(database) -> None:
+    async with database.session() as session, session.begin():
+        connection = models.Connection(business_connection_id="cleanup", owner_user_id=42)
+        session.add(connection)
+        await session.flush()
+        session.add(
+            models.MessageLog(
+                connection_id=connection.id,
+                contact_id=10,
+                direction="in",
+                action=LogAction.CAPTURED.value,
+                body_encrypted=b"encrypted",
+                retention_until=NOW - timedelta(seconds=1),
+            )
+        )
+
+    assert await cleanup_retention_once(database, now=NOW) == 1
+
+    async with database.session() as session:
+        assert await session.get(models.MessageLog, 1) is None

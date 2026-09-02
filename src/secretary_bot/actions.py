@@ -16,6 +16,7 @@ class LogAction(StrEnum):
     SKIPPED_WINDOW_LIMIT = "skipped_window_limit"
     SKIPPED_OWNER_REPLIED = "skipped_owner_replied"
     ERROR = "error"
+    CAPTURED = "captured"
 
 
 ACTION_SQL_LIST = ", ".join(f"'{action.value}'" for action in LogAction)

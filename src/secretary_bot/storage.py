@@ -50,6 +50,7 @@ class ConnectionRecord:
     mark_read: bool
     summary_time: time
     summary_channel_id: int | None
+    message_retention_enabled: bool
     control_state: str
     policy: ConnectionPolicy
 
@@ -765,6 +766,69 @@ async def log_decision(
     return row.id
 
 
+async def capture_message(
+    session: AsyncSession,
+    *,
+    connection_id: int,
+    contact_id: int,
+    tg_message_id: int | None,
+    direction: str,
+    occurred_at: datetime,
+    body_encrypted: bytes,
+    retention_until: datetime,
+) -> int:
+    """Store an encrypted, short-lived message body for summary generation."""
+    row = models.MessageLog(
+        connection_id=connection_id,
+        contact_id=contact_id,
+        tg_message_id=tg_message_id,
+        direction=direction,
+        occurred_at=occurred_at,
+        action=LogAction.CAPTURED.value,
+        body_encrypted=body_encrypted,
+        retention_until=retention_until,
+    )
+    session.add(row)
+    await session.flush()
+    return row.id
+
+
+async def delete_expired_messages(
+    session: AsyncSession, *, now: datetime, batch_size: int = 1000
+) -> int:
+    """Delete at most one bounded batch of expired encrypted message bodies."""
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    expired_ids = list(
+        await session.scalars(
+            select(models.MessageLog.id)
+            .where(
+                models.MessageLog.action == LogAction.CAPTURED.value,
+                models.MessageLog.retention_until <= now,
+            )
+            .order_by(models.MessageLog.retention_until, models.MessageLog.id)
+            .limit(batch_size)
+        )
+    )
+    if not expired_ids:
+        return 0
+    result = await session.execute(
+        delete(models.MessageLog).where(models.MessageLog.id.in_(expired_ids))
+    )
+    return result.rowcount or 0
+
+
+async def purge_retained_messages(session: AsyncSession, *, connection_id: int) -> int:
+    """Immediately erase all retained message bodies for one connection."""
+    result = await session.execute(
+        delete(models.MessageLog).where(
+            models.MessageLog.connection_id == connection_id,
+            models.MessageLog.action == LogAction.CAPTURED.value,
+        )
+    )
+    return result.rowcount or 0
+
+
 async def record_incoming(
     session: AsyncSession,
     connection_id: int,
@@ -927,6 +991,7 @@ async def _record(session: AsyncSession, row: models.Connection) -> ConnectionRe
         mark_read=row.mark_read,
         summary_time=row.summary_time,
         summary_channel_id=row.summary_channel_id,
+        message_retention_enabled=row.message_retention_enabled,
         control_state=row.control_state,
         policy=ConnectionPolicy(
             timezone=row.timezone,

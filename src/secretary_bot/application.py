@@ -34,7 +34,7 @@ from secretary_bot.runtime import RuntimeState, TelegramBot, process_updates
 from secretary_bot.sender import BusinessReplySender
 from secretary_bot.storage import Database, ensure_master
 from secretary_bot.web_api import build_web_router
-from secretary_bot.workers import run_delayed_replies, run_morning_digest
+from secretary_bot.workers import run_delayed_replies, run_morning_digest, run_retention_cleanup
 
 WEB_ROOT = Path(__file__).parent / "web" / "static"
 
@@ -104,6 +104,9 @@ def create_app(
                 run_delayed_replies(pipeline, replies), name="delayed-reply-worker"
             ),
             asyncio.create_task(run_morning_digest(digest), name="morning-digest-worker"),
+            asyncio.create_task(
+                run_retention_cleanup(connection_database), name="retention-cleanup-worker"
+            ),
         ]
         try:
             yield

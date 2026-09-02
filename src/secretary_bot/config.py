@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 
 from secretary_bot.classifier import DEFAULT_TIMEOUT_SECONDS
+from secretary_bot.retention import MessageCipher
 
 _SECRET_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
 _BOT_USERNAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
@@ -29,6 +30,7 @@ class Settings:
     database_url: str = "postgresql+asyncpg://secretary:secretary@127.0.0.1:5432/secretary"
     anthropic_api_key: str | None = None
     classifier_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+    message_encryption_key: str | None = None
 
     @property
     def webhook_url(self) -> str:
@@ -71,6 +73,14 @@ class Settings:
         classifier_timeout = _parse_positive_float(
             "CLASSIFIER_TIMEOUT_SECONDS", default=DEFAULT_TIMEOUT_SECONDS
         )
+        message_encryption_key = os.getenv("MESSAGE_ENCRYPTION_KEY") or None
+        if message_encryption_key is not None:
+            try:
+                MessageCipher.from_encoded_key(message_encryption_key)
+            except ValueError as exc:
+                raise ConfigurationError(
+                    "MESSAGE_ENCRYPTION_KEY must encode exactly 32 bytes"
+                ) from exc
 
         return cls(
             bot_token=bot_token,
@@ -86,6 +96,7 @@ class Settings:
             database_url=database_url,
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or None,
             classifier_timeout_seconds=classifier_timeout,
+            message_encryption_key=message_encryption_key,
         )
 
 

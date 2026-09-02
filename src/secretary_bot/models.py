@@ -114,6 +114,9 @@ class Connection(Base):
     timezone: Mapped[str] = mapped_column(Text, server_default=sql_text("'Europe/Kyiv'"))
     summary_time: Mapped[time] = mapped_column(Time, server_default=sql_text("'09:00:00'"))
     summary_channel_id: Mapped[int | None] = mapped_column(BigInteger)
+    message_retention_enabled: Mapped[bool] = mapped_column(
+        Boolean, server_default=sql_text("false")
+    )
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         UtcDateTime(), server_default=func.now(), onupdate=func.now()
@@ -333,6 +336,7 @@ class MessageLog(Base):
             "contact_id",
             sql_text("occurred_at DESC"),
         ),
+        Index("ix_message_log_retention_until", "retention_until"),
     )
 
     id: Mapped[int] = mapped_column(SURROGATE_KEY, primary_key=True, autoincrement=True)

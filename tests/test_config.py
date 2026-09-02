@@ -104,3 +104,20 @@ def test_bot_username_is_validated(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(ConfigurationError, match="BOT_USERNAME"):
         Settings.from_env()
+
+
+def test_message_encryption_key_is_optional(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "123456:TEST_TOKEN")
+    monkeypatch.setenv("WEBHOOK_SECRET", "valid_secret")
+    monkeypatch.delenv("MESSAGE_ENCRYPTION_KEY", raising=False)
+
+    assert Settings.from_env().message_encryption_key is None
+
+
+def test_message_encryption_key_must_be_32_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "123456:TEST_TOKEN")
+    monkeypatch.setenv("WEBHOOK_SECRET", "valid_secret")
+    monkeypatch.setenv("MESSAGE_ENCRYPTION_KEY", "dG9vLXNob3J0")
+
+    with pytest.raises(ConfigurationError, match="MESSAGE_ENCRYPTION_KEY"):
+        Settings.from_env()
