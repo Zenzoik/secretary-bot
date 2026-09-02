@@ -411,6 +411,7 @@ class SummaryItem(Base):
     )
     questions_asked: Mapped[int] = mapped_column(Integer, server_default=sql_text("0"))
     questions_closed: Mapped[int] = mapped_column(Integer, server_default=sql_text("0"))
+    money_priority: Mapped[bool] = mapped_column(Boolean, server_default=sql_text("false"))
     last_incoming_message_id: Mapped[int | None] = mapped_column(BigInteger)
     telegram_message_id: Mapped[int | None] = mapped_column(BigInteger)
     resolved_at: Mapped[datetime | None] = mapped_column(UtcDateTime())

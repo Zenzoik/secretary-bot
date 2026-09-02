@@ -18,6 +18,8 @@ from secretary_bot.storage import (
     list_connections,
     load_classifier_settings,
     load_retained_dialogues,
+    mark_morning_delivered,
+    pending_morning_for_period,
 )
 from secretary_bot.summary import DialogueSummary, SummaryLanguageModel, summarize_dialogue
 
@@ -154,6 +156,13 @@ class DailySummary:
             settings = await load_classifier_settings(
                 session, connection.id, defaults=self.classifier_defaults
             )
+            morning_rows = await pending_morning_for_period(
+                session,
+                connection.id,
+                period_start=period_start,
+                period_end=period_end,
+            )
+        money_contacts = {row.contact_id for row in morning_rows}
 
         generated: list[tuple[Any, DialogueSummary]] = []
         for dialogue in dialogues:
@@ -179,6 +188,7 @@ class DailySummary:
                     open_questions_json=list(summary.open_questions),
                     questions_asked=summary.questions_asked,
                     questions_closed=summary.questions_closed,
+                    money_priority=dialogue.contact_id in money_contacts,
                     last_incoming_message_id=dialogue.last_incoming_message_id,
                 )
                 for dialogue, summary in generated
@@ -243,6 +253,23 @@ class DailySummary:
             run.status = "delivered"
             run.delivered_at = delivered_at
             run.error_code = None
+            morning_rows = await pending_morning_for_period(
+                session,
+                run.connection_id,
+                period_start=run.period_start,
+                period_end=run.period_end,
+            )
+            summarized_contacts = set(
+                await session.scalars(
+                    select(models.SummaryItem.contact_id).where(
+                        models.SummaryItem.run_id == run.id
+                    )
+                )
+            )
+            await mark_morning_delivered(
+                session,
+                [row.id for row in morning_rows if row.contact_id in summarized_contacts],
+            )
 
     async def _mark_error(
         self,
@@ -288,18 +315,22 @@ def render_summary_header(
     local_end = period_end.astimezone(ZoneInfo(timezone))
     asked = sum(item.questions_asked for item in items)
     closed = sum(item.questions_closed for item in items)
+    money = sum(item.money_priority for item in items)
     return (
         f"📋 Добове самарі · {local_end:%d.%m.%Y}\n"
-        f"Діалогів: {len(items)}\nПитань: {asked} задано · {closed} закрито"
+        f"Діалогів: {len(items)}\n"
+        f"Питань: {asked} задано · {closed} закрито\n"
+        f"💸 Відповісти вранці: {money}"
     )
 
 
 def render_summary_item(item: models.SummaryItem) -> str:
     who = item.contact_name or f"ID {item.contact_id}"
+    priority = "💸 Обіцяли відповісти вранці\n" if item.money_priority else ""
     agreements = "\n".join(f"• {text}" for text in item.agreements_json) or "• немає"
     questions = "\n".join(f"• {text}" for text in item.open_questions_json) or "• немає"
     return (
-        f"👤 {who}\nТема: {item.topic}\n\n"
+        f"👤 {who}\n{priority}Тема: {item.topic}\n\n"
         f"Домовленості:\n{agreements}\n\n"
         f"Відкриті питання:\n{questions}\n\n"
         f"Питання: {item.questions_asked} задано · {item.questions_closed} закрито"

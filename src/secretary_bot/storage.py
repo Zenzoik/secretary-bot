@@ -990,6 +990,26 @@ async def pending_morning(session: AsyncSession, connection_id: int) -> list[mod
     return list(rows)
 
 
+async def pending_morning_for_period(
+    session: AsyncSession,
+    connection_id: int,
+    *,
+    period_start: datetime,
+    period_end: datetime,
+) -> list[models.MorningQueue]:
+    rows = await session.scalars(
+        select(models.MorningQueue)
+        .where(
+            models.MorningQueue.connection_id == connection_id,
+            models.MorningQueue.is_delivered.is_(False),
+            models.MorningQueue.occurred_at >= period_start,
+            models.MorningQueue.occurred_at < period_end,
+        )
+        .order_by(models.MorningQueue.occurred_at)
+    )
+    return list(rows)
+
+
 async def mark_morning_delivered(session: AsyncSession, ids: Sequence[int]) -> None:
     if not ids:
         return

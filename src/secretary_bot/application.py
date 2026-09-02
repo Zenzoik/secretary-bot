@@ -28,7 +28,6 @@ from secretary_bot.ingest import (
     UpdateIngestor,
 )
 from secretary_bot.llm import AnthropicLanguageModel
-from secretary_bot.morning import MorningDigest
 from secretary_bot.notifications import OwnerNotifier, TelegramOwnerNotifier
 from secretary_bot.pipeline import Pipeline
 from secretary_bot.retention import MessageCipher
@@ -40,7 +39,6 @@ from secretary_bot.web_api import build_web_router
 from secretary_bot.workers import (
     run_daily_summary,
     run_delayed_replies,
-    run_morning_digest,
     run_retention_cleanup,
 )
 
@@ -96,9 +94,6 @@ def create_app(
             timeout_seconds=settings.classifier_timeout_seconds
         ),
     )
-    digest = MorningDigest(
-        database=connection_database, notifier=notifier or TelegramOwnerNotifier(bot=telegram_bot)
-    )
     state = RuntimeState(
         bot=telegram_bot,
         pipeline=pipeline,
@@ -133,7 +128,6 @@ def create_app(
             asyncio.create_task(
                 run_delayed_replies(pipeline, replies), name="delayed-reply-worker"
             ),
-            asyncio.create_task(run_morning_digest(digest), name="morning-digest-worker"),
             asyncio.create_task(run_daily_summary(daily_summary), name="daily-summary-worker"),
             asyncio.create_task(
                 run_retention_cleanup(connection_database), name="retention-cleanup-worker"

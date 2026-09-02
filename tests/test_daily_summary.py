@@ -123,6 +123,14 @@ async def test_daily_summary_sends_active_dialogue_once_and_persists_items(datab
             text="Рахунок буде сьогодні.",
             occurred_at=SCHEDULED - timedelta(minutes=50),
         )
+        session.add(
+            models.MorningQueue(
+                connection_id=connection.id,
+                contact_id=100,
+                contact_name="Клієнт",
+                occurred_at=SCHEDULED - timedelta(hours=1),
+            )
+        )
         # Still encrypted but outside the 24-hour summary period.
         await seed_message(
             session,
@@ -153,6 +161,7 @@ async def test_daily_summary_sends_active_dialogue_once_and_persists_items(datab
     assert "Старий неактивний діалог" not in model.transcripts[0]
     assert len(bot.sent) == 2
     assert all(message["chat_id"] == -100123 for message in bot.sent)
+    assert "💸 Відповісти вранці: 1" in bot.sent[0]["text"]
     header_button = bot.sent[0]["reply_markup"].inline_keyboard[0][0]
     assert header_button.callback_data == "summary:read:1"
     item_buttons = bot.sent[1]["reply_markup"].inline_keyboard
@@ -160,15 +169,19 @@ async def test_daily_summary_sends_active_dialogue_once_and_persists_items(datab
     assert item_buttons[1][0].url == "tg://openmessage?user_id=100"
     assert item_buttons[2][0].callback_data == "summary:reply:1"
     assert "Строк оплати" in bot.sent[1]["text"]
+    assert "Обіцяли відповісти вранці" in bot.sent[1]["text"]
     assert "немає" in bot.sent[1]["text"]
 
     async with database.session() as session:
         run = await session.scalar(select(models.SummaryRun))
         item = await session.scalar(select(models.SummaryItem))
+        morning = await session.scalar(select(models.MorningQueue))
     assert run is not None and run.status == "delivered"
     assert run.telegram_message_id == 1
     assert item is not None and item.telegram_message_id == 2
+    assert item.money_priority is True
     assert item.last_incoming_message_id == 10
+    assert morning is not None and morning.is_delivered is True
 
 
 @pytest.mark.asyncio
