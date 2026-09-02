@@ -5,6 +5,7 @@ import logging
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
+from secretary_bot.daily_summary import DailySummary
 from secretary_bot.delayed import DelayedReplyQueue
 from secretary_bot.morning import MorningDigest
 from secretary_bot.pipeline import Pipeline
@@ -14,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 DELAYED_POLL_SECONDS = 1.0
 MORNING_POLL_SECONDS = 60.0
+SUMMARY_POLL_SECONDS = 60.0
 DELIVERY_RETRY_SECONDS = 5
 MAX_DELIVERY_ATTEMPTS = 3
 RETENTION_CLEANUP_SECONDS = 600.0
@@ -83,6 +85,19 @@ async def run_morning_digest(
             raise
         except Exception as exc:
             logger.error("morning digest worker failed: %s", type(exc).__name__)
+        await asyncio.sleep(interval)
+
+
+async def run_daily_summary(
+    summary: DailySummary, *, interval: float = SUMMARY_POLL_SECONDS
+) -> None:
+    while True:
+        try:
+            await summary.run_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("daily summary worker failed: %s", type(exc).__name__)
         await asyncio.sleep(interval)
 
 

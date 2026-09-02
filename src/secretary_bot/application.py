@@ -18,6 +18,7 @@ from redis.asyncio import Redis
 from secretary_bot.classifier import ClassifierSettings, LanguageModel
 from secretary_bot.config import Settings
 from secretary_bot.control import ControlPlane
+from secretary_bot.daily_summary import DailySummary
 from secretary_bot.delayed import DelayedReplyQueue
 from secretary_bot.ingest import (
     DeduplicationUnavailable,
@@ -35,7 +36,12 @@ from secretary_bot.runtime import RuntimeState, TelegramBot, process_updates
 from secretary_bot.sender import BusinessReplySender
 from secretary_bot.storage import Database, ensure_master
 from secretary_bot.web_api import build_web_router
-from secretary_bot.workers import run_delayed_replies, run_morning_digest, run_retention_cleanup
+from secretary_bot.workers import (
+    run_daily_summary,
+    run_delayed_replies,
+    run_morning_digest,
+    run_retention_cleanup,
+)
 
 WEB_ROOT = Path(__file__).parent / "web" / "static"
 
@@ -65,6 +71,11 @@ def create_app(
     replies = delayed_queue or DelayedReplyQueue(client=redis)  # type: ignore[arg-type]
 
     language_model = model or _language_model(settings)
+    message_cipher = (
+        None
+        if settings.message_encryption_key is None
+        else MessageCipher.from_encoded_key(settings.message_encryption_key)
+    )
     pipeline = Pipeline(
         database=connection_database,
         queue=replies,
@@ -72,10 +83,15 @@ def create_app(
         notifier=notifier or TelegramOwnerNotifier(bot=telegram_bot),
         model=language_model,
         classifier_defaults=ClassifierSettings(timeout_seconds=settings.classifier_timeout_seconds),
-        message_cipher=(
-            None
-            if settings.message_encryption_key is None
-            else MessageCipher.from_encoded_key(settings.message_encryption_key)
+        message_cipher=message_cipher,
+    )
+    daily_summary = DailySummary(
+        database=connection_database,
+        bot=telegram_bot,
+        cipher=message_cipher,
+        model=language_model,
+        classifier_defaults=ClassifierSettings(
+            timeout_seconds=settings.classifier_timeout_seconds
         ),
     )
     digest = MorningDigest(
@@ -110,6 +126,7 @@ def create_app(
                 run_delayed_replies(pipeline, replies), name="delayed-reply-worker"
             ),
             asyncio.create_task(run_morning_digest(digest), name="morning-digest-worker"),
+            asyncio.create_task(run_daily_summary(daily_summary), name="daily-summary-worker"),
             asyncio.create_task(
                 run_retention_cleanup(connection_database), name="retention-cleanup-worker"
             ),
