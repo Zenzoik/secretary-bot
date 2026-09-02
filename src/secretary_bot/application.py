@@ -35,6 +35,7 @@ from secretary_bot.retention import MessageCipher
 from secretary_bot.runtime import RuntimeState, TelegramBot, process_updates
 from secretary_bot.sender import BusinessReplySender
 from secretary_bot.storage import Database, ensure_master
+from secretary_bot.summary_actions import SummaryActions
 from secretary_bot.web_api import build_web_router
 from secretary_bot.workers import (
     run_daily_summary,
@@ -76,10 +77,11 @@ def create_app(
         if settings.message_encryption_key is None
         else MessageCipher.from_encoded_key(settings.message_encryption_key)
     )
+    reply_sender = BusinessReplySender(bot=telegram_bot)
     pipeline = Pipeline(
         database=connection_database,
         queue=replies,
-        sender=BusinessReplySender(bot=telegram_bot),
+        sender=reply_sender,
         notifier=notifier or TelegramOwnerNotifier(bot=telegram_bot),
         model=language_model,
         classifier_defaults=ClassifierSettings(timeout_seconds=settings.classifier_timeout_seconds),
@@ -106,6 +108,12 @@ def create_app(
             bot_username=settings.bot_username,
             public_base_url=settings.public_base_url or "",
             delayed_queue=replies,
+        ),
+        summary_actions=SummaryActions(
+            database=connection_database,
+            bot=telegram_bot,
+            sender=reply_sender,
+            cipher=message_cipher,
         ),
         queue_size=settings.update_queue_size,
         allowed_chat_ids=settings.allowed_chat_ids,

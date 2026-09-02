@@ -417,6 +417,20 @@ class SummaryItem(Base):
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
 
 
+class SummaryReplyState(Base):
+    __tablename__ = "summary_reply_states"
+
+    connection_id: Mapped[int] = mapped_column(
+        ForeignKey("connections.id", ondelete="CASCADE"), primary_key=True
+    )
+    summary_item_id: Mapped[int] = mapped_column(
+        ForeignKey("summary_items.id", ondelete="CASCADE"), unique=True
+    )
+    prompt_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime(), index=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
+
+
 class ShadowFeedback(Base):
     __tablename__ = "shadow_feedback"
     __table_args__ = (

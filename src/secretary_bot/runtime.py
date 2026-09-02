@@ -24,6 +24,7 @@ from secretary_bot.storage import (
     set_connection_control,
     upsert_connection,
 )
+from secretary_bot.summary_actions import SummaryActions
 from secretary_bot.texts import (
     CONNECTION_DISABLED_ALERT,
     FEEDBACK_RESULTS,
@@ -55,6 +56,7 @@ class RuntimeState:
     bot: TelegramBot
     pipeline: Pipeline
     control: ControlPlane
+    summary_actions: SummaryActions
     queue_size: int
     # Optional safety net for early operation: when set, only these chats are
     # processed. Empty means the FR-2 policy — every chat except exclusions.
@@ -92,12 +94,16 @@ async def handle_update(update: Update, state: RuntimeState) -> None:
         return
 
     if update.callback_query is not None:
+        if await state.summary_actions.handle_callback(update.callback_query):
+            return
         if await state.control.handle_callback(update.callback_query):
             return
         await _handle_feedback(update, state)
         return
 
     if update.message is not None:
+        if await state.summary_actions.handle_message(update.message):
+            return
         if not await state.control.handle_message(update.message):
             _log(logging.INFO, "message_ignored", update_id=update.update_id)
         return

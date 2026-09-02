@@ -19,6 +19,7 @@ EXPECTED_TABLES = {
     "schedules",
     "shadow_feedback",
     "summary_items",
+    "summary_reply_states",
     "summary_runs",
     "templates",
     "web_sessions",
