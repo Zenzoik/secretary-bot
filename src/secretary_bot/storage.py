@@ -49,6 +49,7 @@ class ConnectionRecord:
     delay_min_seconds: int
     delay_max_seconds: int
     bot_delay_seconds: int
+    max_auto_replies_per_window: int | None
     mark_read: bool
     summary_time: time
     summary_channel_id: int | None
@@ -431,6 +432,7 @@ async def set_delivery_preferences(
     delay_max_seconds: int,
     bot_delay_seconds: int,
     mark_read: bool,
+    max_auto_replies_per_window: int | None = None,
 ) -> None:
     if sender_identity not in {"bot", "owner"}:
         raise ValueError("sender_identity must be bot or owner")
@@ -438,6 +440,8 @@ async def set_delivery_preferences(
         raise ValueError("owner delay must satisfy 0 <= min <= max <= 3600")
     if not 1 <= bot_delay_seconds <= min(delay_max_seconds, 60):
         raise ValueError("bot delay minimum must be between 1 and the delay maximum")
+    if max_auto_replies_per_window is not None and not 1 <= max_auto_replies_per_window <= 100:
+        raise ValueError("reply limit must be between 1 and 100 or disabled")
     row = await session.get(models.Connection, connection_id)
     if row is None:
         raise LookupError("connection not found")
@@ -445,6 +449,7 @@ async def set_delivery_preferences(
     row.delay_min_seconds = delay_min_seconds
     row.delay_max_seconds = delay_max_seconds
     row.bot_delay_seconds = bot_delay_seconds
+    row.max_auto_replies_per_window = max_auto_replies_per_window
     row.mark_read = mark_read
     await session.flush()
 
@@ -680,6 +685,9 @@ async def load_contact_state(
     return ContactState(
         exclusion=None if exclusion_row is None else Exclusion(until=exclusion_row.until),
         last_auto_reply_window_key=None if activity is None else activity.quiet_window_key,
+        auto_reply_count_in_window=(
+            0 if activity is None else activity.quiet_window_reply_count
+        ),
         windows=windows,
     )
 
@@ -948,7 +956,16 @@ async def claim_window(
     schedule their own reply. A claim that is later cancelled costs nothing —
     one missed auto-reply is invisible, five are not.
     """
-    await _touch_activity(session, connection_id, contact_id, quiet_window_key=window_key)
+    activity = await session.get(models.ContactActivity, (connection_id, contact_id))
+    if activity is None:
+        activity = models.ContactActivity(connection_id=connection_id, contact_id=contact_id)
+        session.add(activity)
+    if activity.quiet_window_key == window_key:
+        activity.quiet_window_reply_count += 1
+    else:
+        activity.quiet_window_key = window_key
+        activity.quiet_window_reply_count = 1
+    await session.flush()
 
 
 async def record_auto_reply(
@@ -1098,6 +1115,7 @@ async def _record(session: AsyncSession, row: models.Connection) -> ConnectionRe
         delay_min_seconds=row.delay_min_seconds,
         delay_max_seconds=row.delay_max_seconds,
         bot_delay_seconds=row.bot_delay_seconds,
+        max_auto_replies_per_window=row.max_auto_replies_per_window,
         mark_read=row.mark_read,
         summary_time=row.summary_time,
         summary_channel_id=row.summary_channel_id,
@@ -1109,6 +1127,7 @@ async def _record(session: AsyncSession, row: models.Connection) -> ConnectionRe
             is_active=row.is_active,
             kill_switch=row.kill_switch,
             muted_until=row.muted_until,
+            max_auto_replies_per_window=row.max_auto_replies_per_window,
         ),
     )
 

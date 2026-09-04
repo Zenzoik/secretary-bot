@@ -66,12 +66,14 @@ class ConnectionPolicy:
     is_active: bool = True
     kill_switch: bool = False
     muted_until: datetime | None = None
+    max_auto_replies_per_window: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class ContactState:
     exclusion: Exclusion | None = None
     last_auto_reply_window_key: str | None = None
+    auto_reply_count_in_window: int = 0
     windows: tuple[QuietWindow, ...] = ()
 
 
@@ -103,7 +105,11 @@ def evaluate_gate(policy: ConnectionPolicy, contact: ContactState, *, now: datet
     occurrence = current_window(windows, now.astimezone(ZoneInfo(policy.timezone)))
     if occurrence is None:
         return GateResult(GateDecision.SKIPPED_SCHEDULE)
-    if contact.last_auto_reply_window_key == occurrence.key:
+    if (
+        policy.max_auto_replies_per_window is not None
+        and contact.last_auto_reply_window_key == occurrence.key
+        and contact.auto_reply_count_in_window >= policy.max_auto_replies_per_window
+    ):
         return GateResult(GateDecision.SKIPPED_WINDOW_LIMIT, window_key=occurrence.key)
     return GateResult(GateDecision.ALLOWED, window_key=occurrence.key)
 

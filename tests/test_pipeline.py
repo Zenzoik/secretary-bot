@@ -139,7 +139,7 @@ async def scheduled(pipeline: Pipeline) -> list[ReplyTask]:
 @pytest.mark.asyncio
 async def test_night_message_is_scheduled_once_and_answered_once(world) -> None:
     pipeline, bot, notifier, database = world
-    await set_connection(database, dry_run=False)
+    await set_connection(database, dry_run=False, max_auto_replies_per_window=1)
 
     for message_id in range(5):
         await pipeline.process_incoming(message(message_id=message_id))
@@ -155,6 +155,17 @@ async def test_night_message_is_scheduled_once_and_answered_once(world) -> None:
         f"{DEFAULT_TEMPLATES[TemplateCode.OFF_HOURS_DEFAULT]}\n\n{BOT_IDENTITY_SUFFIX}"
     )
     assert await actions(database) == ["skipped_window_limit"] * 4 + ["replied"]
+
+
+@pytest.mark.asyncio
+async def test_default_schedules_every_message_in_the_window(world) -> None:
+    pipeline, _, _, database = world
+    await set_connection(database, dry_run=False)
+
+    for message_id in range(5):
+        await pipeline.process_incoming(message(message_id=message_id))
+
+    assert len(await scheduled(pipeline)) == 5
 
 
 @pytest.mark.asyncio

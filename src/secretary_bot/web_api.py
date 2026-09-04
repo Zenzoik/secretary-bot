@@ -69,6 +69,7 @@ class DeliveryPayload(BaseModel):
     delay_max_seconds: Annotated[int, Field(ge=1, le=3600)]
     bot_delay_seconds: Annotated[int, Field(ge=1, le=60)]
     mark_read: bool
+    max_auto_replies_per_window: Annotated[int | None, Field(ge=1, le=100)] = None
 
     @model_validator(mode="after")
     def validate_bounds(self) -> DeliveryPayload:
@@ -247,6 +248,7 @@ def build_web_router(
                 delay_max_seconds=payload.delay_max_seconds,
                 bot_delay_seconds=payload.bot_delay_seconds,
                 mark_read=payload.mark_read,
+                max_auto_replies_per_window=payload.max_auto_replies_per_window,
             )
             await session.refresh(principal.connection)
             return _delivery(principal.connection)
@@ -583,6 +585,7 @@ def _delivery(connection: models.Connection) -> dict[str, Any]:
         "delay_max_seconds": connection.delay_max_seconds,
         "bot_delay_seconds": connection.bot_delay_seconds,
         "mark_read": connection.mark_read,
+        "max_auto_replies_per_window": connection.max_auto_replies_per_window,
     }
 
 

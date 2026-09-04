@@ -9,9 +9,9 @@
     <meta property="og:description" content="Налаштування без зайвих кроків">
     <meta property="og:image" content="{{BASE_URL}}/assets/og.png">
     <title>Personal Secretary — налаштування</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260904-3">
+    <link rel="stylesheet" href="/assets/styles.css?v=20260904-4">
     <script src="https://telegram.org/js/telegram-web-app.js?59"></script>
-    <script src="/assets/app.js?v=20260904-3" defer></script>
+    <script src="/assets/app.js?v=20260904-4" defer></script>
   </head>
   <body>
     <div class="app-shell" id="app" aria-busy="true">
@@ -89,6 +89,10 @@
                 </div>
               </div>
               <label class="switch-row"><span><strong>Позначати прочитаним</strong><small>Тільки після успішної відповіді</small></span><input name="mark_read" type="checkbox" role="switch"></label>
+              <label>Максимум автовідповідей одному контакту за неробоче вікно
+                <input name="max_auto_replies_per_window" type="number" min="0" max="100" required>
+                <small>0 — без обмежень: бот обробляє кожне підтримуване повідомлення.</small>
+              </label>
               <div class="form-actions"><button class="primary" type="submit">Зберегти доставку</button></div>
             </form>
           </section>

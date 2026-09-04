@@ -84,6 +84,7 @@ def test_critical_domain_checks_are_present() -> None:
             "ck_connections_control_state_values",
             "ck_connections_delay_max_seconds_range",
             "ck_connections_delay_min_seconds_range",
+            "ck_connections_max_auto_replies_per_window_range",
             "ck_connections_sender_identity_values",
         },
         "schedules": {"ck_schedules_weekday_mask_range"},

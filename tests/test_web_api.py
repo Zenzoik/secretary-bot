@@ -131,6 +131,7 @@ async def test_delivery_schedule_templates_classifier_and_summary_apply_immediat
                 "delay_max_seconds": 44,
                 "bot_delay_seconds": 7,
                 "mark_read": True,
+                "max_auto_replies_per_window": 3,
             },
         )
         schedule = await client.put(
@@ -185,6 +186,7 @@ async def test_delivery_schedule_templates_classifier_and_summary_apply_immediat
         )
 
     assert delivery.json()["sender_identity"] == "owner"
+    assert delivery.json()["max_auto_replies_per_window"] == 3
     assert schedule.json()["windows"][0]["weekday_mask"] == 31
     assert templates.json()["money_priority"] == "Оплату побачив"
     assert classifier.json()["directions"][1]["keywords"] == ["гонорар"]

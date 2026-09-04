@@ -90,6 +90,11 @@ class Connection(Base):
             "bot_delay_seconds <= delay_max_seconds",
             name="bot_delay_within_max",
         ),
+        CheckConstraint(
+            "max_auto_replies_per_window IS NULL OR "
+            "max_auto_replies_per_window BETWEEN 1 AND 100",
+            name="max_auto_replies_per_window_range",
+        ),
     )
 
     id: Mapped[int] = mapped_column(SURROGATE_KEY, primary_key=True, autoincrement=True)
@@ -106,6 +111,7 @@ class Connection(Base):
     delay_min_seconds: Mapped[int] = mapped_column(SmallInteger, server_default=sql_text("10"))
     delay_max_seconds: Mapped[int] = mapped_column(SmallInteger, server_default=sql_text("60"))
     bot_delay_seconds: Mapped[int] = mapped_column(SmallInteger, server_default=sql_text("5"))
+    max_auto_replies_per_window: Mapped[int | None] = mapped_column(SmallInteger)
     mark_read: Mapped[bool] = mapped_column(Boolean, server_default=sql_text("false"))
     kill_switch: Mapped[bool] = mapped_column(Boolean, server_default=sql_text("false"))
     muted_until: Mapped[datetime | None] = mapped_column(UtcDateTime())
@@ -294,6 +300,9 @@ class ContactActivity(Base):
     owner_last_reply_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
     last_auto_reply_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
     quiet_window_key: Mapped[str | None] = mapped_column(Text)
+    quiet_window_reply_count: Mapped[int] = mapped_column(
+        Integer, server_default=sql_text("0")
+    )
 
 
 class WebSession(Base):

@@ -269,6 +269,7 @@ async def test_delivery_preferences_are_owner_scoped_and_validated(
         delay_max_seconds=34,
         bot_delay_seconds=3,
         mark_read=True,
+        max_auto_replies_per_window=4,
     )
 
     changed = await load_connection(session, "connection-1")
@@ -277,6 +278,7 @@ async def test_delivery_preferences_are_owner_scoped_and_validated(
     assert changed.sender_identity == "owner"
     assert (changed.delay_min_seconds, changed.delay_max_seconds) == (12, 34)
     assert changed.bot_delay_seconds == 3
+    assert changed.max_auto_replies_per_window == 4
     assert changed.mark_read is True
     assert untouched is not None
     assert untouched.sender_identity == "bot"
@@ -585,9 +587,11 @@ async def test_claiming_a_window_blocks_the_next_message_immediately(
     connection_id = await stored_connection(session)
 
     await claim_window(session, connection_id, 100, window_key="2026-08-23:1")
+    await claim_window(session, connection_id, 100, window_key="2026-08-23:1")
     state = await load_contact_state(session, connection_id, 100)
 
     assert state.last_auto_reply_window_key == "2026-08-23:1"
+    assert state.auto_reply_count_in_window == 2
 
 
 @pytest.mark.asyncio

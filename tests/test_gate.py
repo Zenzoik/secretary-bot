@@ -104,13 +104,32 @@ def test_contact_windows_replace_the_global_schedule() -> None:
 
 
 def test_second_message_in_the_same_window_is_skipped() -> None:
-    allowed = evaluate_gate(policy(), ContactState(), now=INSIDE_NIGHT)
-    contact = ContactState(last_auto_reply_window_key=allowed.window_key)
+    allowed = evaluate_gate(
+        policy(max_auto_replies_per_window=1), ContactState(), now=INSIDE_NIGHT
+    )
+    contact = ContactState(
+        last_auto_reply_window_key=allowed.window_key,
+        auto_reply_count_in_window=1,
+    )
 
-    result = evaluate_gate(policy(), contact, now=INSIDE_NIGHT)
+    result = evaluate_gate(
+        policy(max_auto_replies_per_window=1), contact, now=INSIDE_NIGHT
+    )
 
     assert result.decision is GateDecision.SKIPPED_WINDOW_LIMIT
     assert result.window_key == allowed.window_key
+
+
+def test_default_has_no_per_window_reply_limit() -> None:
+    allowed = evaluate_gate(policy(), ContactState(), now=INSIDE_NIGHT)
+    contact = ContactState(
+        last_auto_reply_window_key=allowed.window_key,
+        auto_reply_count_in_window=500,
+    )
+
+    assert evaluate_gate(policy(), contact, now=INSIDE_NIGHT).decision is (
+        GateDecision.ALLOWED
+    )
 
 
 def test_next_night_is_a_new_window() -> None:

@@ -124,6 +124,7 @@
     $(`input[name=sender_identity][value=${data.sender_identity}]`, form).checked = true;
     ["delay_min_seconds", "delay_max_seconds", "bot_delay_seconds"].forEach((name) => { form.elements[name].value = data[name]; });
     form.elements.mark_read.checked = data.mark_read;
+    form.elements.max_auto_replies_per_window.value = data.max_auto_replies_per_window || 0;
     renderDelayRanges();
   }
 
@@ -294,7 +295,8 @@
     });
     $("#delivery-form").addEventListener("submit", (event) => { event.preventDefault(); submit(event.currentTarget, async () => {
       const form = event.currentTarget;
-      state.bootstrap.delivery = await api("/api/v1/delivery", { method: "PUT", body: JSON.stringify({ sender_identity: form.elements.sender_identity.value, delay_min_seconds: Number(form.elements.delay_min_seconds.value), delay_max_seconds: Number(form.elements.delay_max_seconds.value), bot_delay_seconds: Number(form.elements.bot_delay_seconds.value), mark_read: form.elements.mark_read.checked }) });
+      const rawLimit = Number(form.elements.max_auto_replies_per_window.value);
+      state.bootstrap.delivery = await api("/api/v1/delivery", { method: "PUT", body: JSON.stringify({ sender_identity: form.elements.sender_identity.value, delay_min_seconds: Number(form.elements.delay_min_seconds.value), delay_max_seconds: Number(form.elements.delay_max_seconds.value), bot_delay_seconds: Number(form.elements.bot_delay_seconds.value), mark_read: form.elements.mark_read.checked, max_auto_replies_per_window: rawLimit || null }) });
       renderStatus();
     }); });
     $("#add-schedule-window").addEventListener("click", () => createWindow($("#schedule-windows")));
