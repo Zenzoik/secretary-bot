@@ -40,6 +40,7 @@ class DailySummary:
     cipher: MessageCipher | None
     model: SummaryLanguageModel | None
     classifier_defaults: ClassifierSettings
+    summary_timeout_seconds: float = 60.0
 
     async def run_once(self, *, now: datetime | None = None) -> int:
         moment = now or datetime.now(UTC)
@@ -170,7 +171,7 @@ class DailySummary:
                 dialogue,
                 model=self.model,
                 model_name=settings.model,
-                timeout_seconds=settings.timeout_seconds,
+                timeout_seconds=self.summary_timeout_seconds,
             )
             generated.append((dialogue, summary))
 

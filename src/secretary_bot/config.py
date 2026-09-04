@@ -34,6 +34,7 @@ class Settings:
     openai_model: str = "gpt-5-mini"
     anthropic_api_key: str | None = None
     classifier_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
+    summary_timeout_seconds: float = 60.0
     message_encryption_key: str | None = None
 
     @property
@@ -77,6 +78,7 @@ class Settings:
         classifier_timeout = _parse_positive_float(
             "CLASSIFIER_TIMEOUT_SECONDS", default=DEFAULT_TIMEOUT_SECONDS
         )
+        summary_timeout = _parse_positive_float("SUMMARY_TIMEOUT_SECONDS", default=60.0)
         llm_provider = (os.getenv("LLM_PROVIDER") or "auto").strip().lower()
         if llm_provider not in _LLM_PROVIDERS:
             raise ConfigurationError("LLM_PROVIDER must be auto, openai or anthropic")
@@ -114,6 +116,7 @@ class Settings:
             openai_model=os.getenv("OPENAI_MODEL") or "gpt-5-mini",
             anthropic_api_key=anthropic_api_key,
             classifier_timeout_seconds=classifier_timeout,
+            summary_timeout_seconds=summary_timeout,
             message_encryption_key=message_encryption_key,
         )
 

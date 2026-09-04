@@ -116,6 +116,20 @@ def test_classifier_timeout_must_be_positive(monkeypatch: pytest.MonkeyPatch) ->
         Settings.from_env()
 
 
+def test_summary_timeout_is_separate_and_must_be_positive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "123456:TEST_TOKEN")
+    monkeypatch.setenv("WEBHOOK_SECRET", "valid_secret")
+    monkeypatch.setenv("SUMMARY_TIMEOUT_SECONDS", "45")
+
+    assert Settings.from_env().summary_timeout_seconds == 45
+
+    monkeypatch.setenv("SUMMARY_TIMEOUT_SECONDS", "0")
+    with pytest.raises(ConfigurationError, match="SUMMARY_TIMEOUT_SECONDS"):
+        Settings.from_env()
+
+
 def test_master_user_id_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BOT_TOKEN", "123456:TEST_TOKEN")
     monkeypatch.setenv("WEBHOOK_SECRET", "valid_secret")

@@ -94,6 +94,7 @@ def create_app(
         classifier_defaults=ClassifierSettings(
             timeout_seconds=settings.classifier_timeout_seconds
         ),
+        summary_timeout_seconds=settings.summary_timeout_seconds,
     )
     state = RuntimeState(
         bot=telegram_bot,
@@ -218,11 +219,16 @@ def _language_model(settings: Settings) -> LanguageModel | None:
     if provider in {"auto", "openai"} and settings.openai_api_key is not None:
         return OpenAILanguageModel.from_api_key(
             settings.openai_api_key,
-            timeout_seconds=settings.classifier_timeout_seconds,
+            timeout_seconds=max(
+                settings.classifier_timeout_seconds, settings.summary_timeout_seconds
+            ),
             default_model=settings.openai_model,
         )
     if provider in {"auto", "anthropic"} and settings.anthropic_api_key is not None:
         return AnthropicLanguageModel.from_api_key(
-            settings.anthropic_api_key, timeout_seconds=settings.classifier_timeout_seconds
+            settings.anthropic_api_key,
+            timeout_seconds=max(
+                settings.classifier_timeout_seconds, settings.summary_timeout_seconds
+            ),
         )
     return None
