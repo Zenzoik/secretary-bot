@@ -9,6 +9,7 @@ from secretary_bot.retention import MessageCipher
 
 _SECRET_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
 _BOT_USERNAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
+_LLM_PROVIDERS = frozenset({"auto", "openai", "anthropic"})
 
 
 class ConfigurationError(ValueError):
@@ -28,6 +29,9 @@ class Settings:
     redis_url: str = "redis://127.0.0.1:6379/0"
     dedup_ttl_seconds: int = 86400
     database_url: str = "postgresql+asyncpg://secretary:secretary@127.0.0.1:5432/secretary"
+    llm_provider: str = "auto"
+    openai_api_key: str | None = None
+    openai_model: str = "gpt-5-mini"
     anthropic_api_key: str | None = None
     classifier_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
     message_encryption_key: str | None = None
@@ -73,6 +77,17 @@ class Settings:
         classifier_timeout = _parse_positive_float(
             "CLASSIFIER_TIMEOUT_SECONDS", default=DEFAULT_TIMEOUT_SECONDS
         )
+        llm_provider = (os.getenv("LLM_PROVIDER") or "auto").strip().lower()
+        if llm_provider not in _LLM_PROVIDERS:
+            raise ConfigurationError("LLM_PROVIDER must be auto, openai or anthropic")
+        openai_api_key = os.getenv("OPENAI_API_KEY") or None
+        anthropic_api_key = os.getenv("ANTHROPIC_API_KEY") or None
+        if llm_provider == "openai" and openai_api_key is None:
+            raise ConfigurationError("OPENAI_API_KEY is required when LLM_PROVIDER=openai")
+        if llm_provider == "anthropic" and anthropic_api_key is None:
+            raise ConfigurationError(
+                "ANTHROPIC_API_KEY is required when LLM_PROVIDER=anthropic"
+            )
         message_encryption_key = os.getenv("MESSAGE_ENCRYPTION_KEY") or None
         if message_encryption_key is not None:
             try:
@@ -94,7 +109,10 @@ class Settings:
             redis_url=redis_url,
             dedup_ttl_seconds=dedup_ttl_seconds,
             database_url=database_url,
-            anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or None,
+            llm_provider=llm_provider,
+            openai_api_key=openai_api_key,
+            openai_model=os.getenv("OPENAI_MODEL") or "gpt-5-mini",
+            anthropic_api_key=anthropic_api_key,
             classifier_timeout_seconds=classifier_timeout,
             message_encryption_key=message_encryption_key,
         )

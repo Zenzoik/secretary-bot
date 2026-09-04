@@ -12,13 +12,41 @@ def access_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_defaults_keep_the_bot_offline_and_silent(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BOT_TOKEN", "123456:TEST_TOKEN")
     monkeypatch.setenv("WEBHOOK_SECRET", "valid_secret")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
     monkeypatch.delenv("ALLOWED_CHAT_IDS", raising=False)
 
     settings = Settings.from_env()
 
     assert settings.anthropic_api_key is None
+    assert settings.openai_api_key is None
+    assert settings.llm_provider == "auto"
+    assert settings.openai_model == "gpt-5-mini"
     assert settings.allowed_chat_ids == frozenset()
+
+
+def test_openai_provider_requires_its_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "123456:TEST_TOKEN")
+    monkeypatch.setenv("WEBHOOK_SECRET", "valid_secret")
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    with pytest.raises(ConfigurationError, match="OPENAI_API_KEY"):
+        Settings.from_env()
+
+
+def test_openai_configuration_is_loaded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "123456:TEST_TOKEN")
+    monkeypatch.setenv("WEBHOOK_SECRET", "valid_secret")
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENAI_MODEL", "gpt-5-mini-test")
+
+    settings = Settings.from_env()
+
+    assert settings.openai_api_key == "sk-test"
+    assert settings.openai_model == "gpt-5-mini-test"
 
 
 def test_webhook_secret_rejects_unsupported_characters(

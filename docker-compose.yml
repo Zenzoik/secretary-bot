@@ -47,6 +47,9 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       DATABASE_URL: postgresql+asyncpg://secretary:${POSTGRES_PASSWORD}@postgres:5432/secretary
       REDIS_URL: redis://redis:6379/0
+      LLM_PROVIDER: ${LLM_PROVIDER:-auto}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5-mini}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ALLOWED_CHAT_IDS: ${ALLOWED_CHAT_IDS:-}
       CLASSIFIER_TIMEOUT_SECONDS: ${CLASSIFIER_TIMEOUT_SECONDS:-8}

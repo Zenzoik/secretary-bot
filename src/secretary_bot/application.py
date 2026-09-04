@@ -27,7 +27,7 @@ from secretary_bot.ingest import (
     RedisDeduplicator,
     UpdateIngestor,
 )
-from secretary_bot.llm import AnthropicLanguageModel
+from secretary_bot.llm import AnthropicLanguageModel, OpenAILanguageModel
 from secretary_bot.notifications import OwnerNotifier, TelegramOwnerNotifier
 from secretary_bot.pipeline import Pipeline
 from secretary_bot.retention import MessageCipher
@@ -69,6 +69,7 @@ def create_app(
     redis = Redis.from_url(settings.redis_url, decode_responses=True) if owns_redis else None
     replies = delayed_queue or DelayedReplyQueue(client=redis)  # type: ignore[arg-type]
 
+    owns_language_model = model is None
     language_model = model or _language_model(settings)
     message_cipher = (
         None
@@ -147,6 +148,8 @@ def create_app(
                 await redis.aclose()
             if owns_database:
                 await connection_database.aclose()
+            if owns_language_model and language_model is not None:
+                await language_model.aclose()  # type: ignore[attr-defined]
             if owns_bot:
                 await telegram_bot.session.close()  # type: ignore[union-attr]
 
@@ -211,8 +214,15 @@ def create_app(
 
 def _language_model(settings: Settings) -> LanguageModel | None:
     """No API key means the keyword dictionary decides — never a crash."""
-    if settings.anthropic_api_key is None:
-        return None
-    return AnthropicLanguageModel.from_api_key(
-        settings.anthropic_api_key, timeout_seconds=settings.classifier_timeout_seconds
-    )
+    provider = settings.llm_provider
+    if provider in {"auto", "openai"} and settings.openai_api_key is not None:
+        return OpenAILanguageModel.from_api_key(
+            settings.openai_api_key,
+            timeout_seconds=settings.classifier_timeout_seconds,
+            default_model=settings.openai_model,
+        )
+    if provider in {"auto", "anthropic"} and settings.anthropic_api_key is not None:
+        return AnthropicLanguageModel.from_api_key(
+            settings.anthropic_api_key, timeout_seconds=settings.classifier_timeout_seconds
+        )
+    return None
