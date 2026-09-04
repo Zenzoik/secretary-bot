@@ -134,6 +134,18 @@ async def test_delivery_schedule_templates_classifier_and_summary_apply_immediat
                 "max_auto_replies_per_window": 3,
             },
         )
+        escalation = await client.put(
+            "/api/v1/escalation",
+            headers=headers(),
+            json={
+                "enabled": True,
+                "price_amount": "250.00",
+                "currency": "UAH",
+                "offer_text": "Потрібна термінова відповідь?",
+                "confirm_text": "Платне звернення підтверджено.",
+                "decline_text": "Зараз терміново відповісти не вийде.",
+            },
+        )
         schedule = await client.put(
             "/api/v1/schedule",
             headers=headers(),
@@ -187,6 +199,14 @@ async def test_delivery_schedule_templates_classifier_and_summary_apply_immediat
 
     assert delivery.json()["sender_identity"] == "owner"
     assert delivery.json()["max_auto_replies_per_window"] == 3
+    assert escalation.json() == {
+        "enabled": True,
+        "price_amount": "250.00",
+        "currency": "UAH",
+        "offer_text": "Потрібна термінова відповідь?",
+        "confirm_text": "Платне звернення підтверджено.",
+        "decline_text": "Зараз терміново відповісти не вийде.",
+    }
     assert schedule.json()["windows"][0]["weekday_mask"] == 31
     assert templates.json()["money_priority"] == "Оплату побачив"
     assert classifier.json()["directions"][1]["keywords"] == ["гонорар"]
@@ -198,6 +218,26 @@ async def test_delivery_schedule_templates_classifier_and_summary_apply_immediat
         assert connection.sender_identity == "owner"
         assert connection.policy.timezone == "Europe/Prague"
         assert connection.policy.windows[0].weekday_mask == 31
+
+
+@pytest.mark.asyncio
+async def test_paid_escalation_requires_positive_price_when_enabled(database: Database) -> None:
+    await seed_owner(database)
+    transport = ASGITransport(app=web_app(database))
+    payload = {
+        "enabled": True,
+        "price_amount": "0",
+        "currency": "UAH",
+        "offer_text": "Пропозиція",
+        "confirm_text": "Підтверджено",
+        "decline_text": "Відмовлено",
+    }
+    async with AsyncClient(transport=transport, base_url="https://testserver") as client:
+        response = await client.put(
+            "/api/v1/escalation", headers=headers(), json=payload
+        )
+
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio

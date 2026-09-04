@@ -20,6 +20,7 @@ from secretary_bot.storage import (
     load_retained_dialogues,
     mark_morning_delivered,
     pending_morning_for_period,
+    request_counts_for_period,
 )
 from secretary_bot.summary import DialogueSummary, SummaryLanguageModel, summarize_dialogue
 
@@ -163,6 +164,12 @@ class DailySummary:
                 period_start=period_start,
                 period_end=period_end,
             )
+            request_counts = await request_counts_for_period(
+                session,
+                connection_id=connection.id,
+                period_start=period_start,
+                period_end=period_end,
+            )
         money_contacts = {row.contact_id for row in morning_rows}
 
         generated: list[tuple[Any, DialogueSummary]] = []
@@ -190,6 +197,8 @@ class DailySummary:
                     open_questions_json=list(summary.open_questions),
                     questions_asked=summary.questions_asked,
                     questions_closed=summary.questions_closed,
+                    normal_request_count=request_counts.get(dialogue.contact_id, (0, 0))[0],
+                    paid_request_count=request_counts.get(dialogue.contact_id, (0, 0))[1],
                     money_priority=dialogue.contact_id in money_contacts,
                     last_incoming_message_id=dialogue.last_incoming_message_id,
                 )
@@ -318,10 +327,13 @@ def render_summary_header(
     asked = sum(item.questions_asked for item in items)
     closed = sum(item.questions_closed for item in items)
     money = sum(item.money_priority for item in items)
+    normal_requests = sum(item.normal_request_count for item in items)
+    paid_requests = sum(item.paid_request_count for item in items)
     return (
         f"📋 Добове самарі · {local_end:%d.%m.%Y}\n"
         f"Діалогів: {len(items)}\n"
         f"Питань: {asked} задано · {closed} закрито\n"
+        f"Звернень поза графіком: {normal_requests} звичайних · {paid_requests} платних\n"
         f"💸 Відповісти вранці: {money}"
     )
 
@@ -335,7 +347,9 @@ def render_summary_item(item: models.SummaryItem) -> str:
         f"👤 {who}\n{priority}Тема: {item.topic}\n\n"
         f"Домовленості:\n{agreements}\n\n"
         f"Відкриті питання:\n{questions}\n\n"
-        f"Питання: {item.questions_asked} задано · {item.questions_closed} закрито"
+        f"Питання: {item.questions_asked} задано · {item.questions_closed} закрито\n"
+        f"Поза графіком: {item.normal_request_count} звичайних · "
+        f"{item.paid_request_count} платних"
     )
 
 

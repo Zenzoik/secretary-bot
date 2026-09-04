@@ -155,6 +155,7 @@ async def test_night_message_is_scheduled_once_and_answered_once(world) -> None:
         f"{DEFAULT_TEMPLATES[TemplateCode.OFF_HOURS_DEFAULT]}\n\n{BOT_IDENTITY_SUFFIX}"
     )
     assert await actions(database) == ["skipped_window_limit"] * 4 + ["replied"]
+    assert await count(database, models.ContactRequest) == 5
 
 
 @pytest.mark.asyncio
@@ -165,7 +166,29 @@ async def test_default_schedules_every_message_in_the_window(world) -> None:
     for message_id in range(5):
         await pipeline.process_incoming(message(message_id=message_id))
 
-    assert len(await scheduled(pipeline)) == 5
+    tasks = await scheduled(pipeline)
+    assert len(tasks) == 5
+    assert all(task.request_id is not None for task in tasks)
+    assert await count(database, models.ContactRequest) == 5
+
+
+@pytest.mark.asyncio
+async def test_enabled_escalation_adds_urgent_button_to_live_reply(world) -> None:
+    pipeline, bot, _, database = world
+    await set_connection(
+        database,
+        dry_run=False,
+        escalation_enabled=True,
+        escalation_price_amount=250,
+    )
+
+    await pipeline.process_incoming(message())
+    task = (await scheduled(pipeline))[0]
+    await pipeline.deliver(task, now=NIGHT)
+
+    button = bot.sent[0]["reply_markup"].inline_keyboard[0][0]
+    assert button.text == "🚨 Терміново"
+    assert button.callback_data == f"escalation:offer:{task.request_id}"
 
 
 @pytest.mark.asyncio

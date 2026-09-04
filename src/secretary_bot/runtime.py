@@ -11,6 +11,7 @@ from aiogram.types import BusinessConnection, Message, Update
 
 from secretary_bot.callbacks import finalize_callback
 from secretary_bot.control import ControlPlane
+from secretary_bot.escalation import EscalationActions
 from secretary_bot.hard_filter import apply_hard_filter
 from secretary_bot.notifications import parse_feedback
 from secretary_bot.pipeline import IncomingMessage, Pipeline
@@ -57,6 +58,7 @@ class RuntimeState:
     bot: TelegramBot
     pipeline: Pipeline
     control: ControlPlane
+    escalation_actions: EscalationActions
     summary_actions: SummaryActions
     summary_channel_connector: SummaryChannelConnector
     queue_size: int
@@ -96,6 +98,8 @@ async def handle_update(update: Update, state: RuntimeState) -> None:
         return
 
     if update.callback_query is not None:
+        if await state.escalation_actions.handle_callback(update.callback_query):
+            return
         if await state.summary_actions.handle_callback(update.callback_query):
             return
         if await state.control.handle_callback(update.callback_query):

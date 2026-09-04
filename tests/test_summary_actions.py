@@ -240,6 +240,35 @@ async def test_persistent_button_selects_contact_and_sends_as_bot(database) -> N
 
 
 @pytest.mark.asyncio
+async def test_direct_reply_reports_closed_telegram_window(database) -> None:
+    from aiogram.exceptions import TelegramBadRequest
+    from aiogram.methods import SendMessage
+
+    class InactiveChatBot(FakeBot):
+        async def send_message(self, **kwargs: Any) -> Any:
+            if "business_connection_id" in kwargs:
+                raise TelegramBadRequest(
+                    method=SendMessage(chat_id=kwargs["chat_id"], text=kwargs["text"]),
+                    message="Bad Request: BUSINESS_CHAT_INACTIVE",
+                )
+            return await super().send_message(**kwargs)
+
+    await seed_summary(database)
+    bot = InactiveChatBot()
+    handler = actions(database, bot)
+    await handler.handle_message(
+        reply_message(BUTTON_SEND_BOT, reply_to_message_id=0), now=NOW
+    )
+    await handler.handle_callback(callback("direct:select:100"), now=NOW)
+
+    assert await handler.handle_message(
+        reply_message("Тест", reply_to_message_id=102), now=NOW
+    )
+
+    assert "24-годинне вікно Telegram" in bot.sent[-1]["text"]
+
+
+@pytest.mark.asyncio
 async def test_read_all_marks_only_dialogues_from_this_summary(database) -> None:
     run_id, _, _ = await seed_summary(database)
     bot = FakeBot()

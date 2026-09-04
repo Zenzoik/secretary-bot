@@ -123,6 +123,15 @@ MONEY_PRIORITY_TEMPLATE = (
 )
 BOT_IDENTITY_SUFFIX = "— 🤖 Секретар"
 
+ESCALATION_OFFER_TEMPLATE = (
+    "Якщо відповідь потрібна терміново, можна створити платне звернення."
+)
+ESCALATION_CONFIRM_TEMPLATE = (
+    "Платне звернення підтверджено. Зв’язок не гарантовано, але звернення "
+    "буде враховано в рахунку наприкінці місяця."
+)
+ESCALATION_DECLINE_TEMPLATE = "На жаль, зараз немає можливості відповісти терміново."
+
 CONNECTION_DISABLED_ALERT = (
     "⚠️ Telegram Business відключено. Чергу відповідей очищено, автовідповіді зупинено."
 )

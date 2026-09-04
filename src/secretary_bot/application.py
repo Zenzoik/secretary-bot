@@ -20,6 +20,7 @@ from secretary_bot.config import Settings
 from secretary_bot.control import ControlPlane
 from secretary_bot.daily_summary import DailySummary
 from secretary_bot.delayed import DelayedReplyQueue
+from secretary_bot.escalation import EscalationActions
 from secretary_bot.ingest import (
     DeduplicationUnavailable,
     Deduplicator,
@@ -108,6 +109,11 @@ def create_app(
             bot_username=settings.bot_username,
             public_base_url=settings.public_base_url or "",
             delayed_queue=replies,
+        ),
+        escalation_actions=EscalationActions(
+            database=connection_database,
+            bot=telegram_bot,
+            sender=reply_sender,
         ),
         summary_actions=SummaryActions(
             database=connection_database,

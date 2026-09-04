@@ -32,7 +32,9 @@ from secretary_bot.storage import (
     record_auto_reply,
     record_feedback,
     record_incoming,
+    record_off_hours_request,
     record_owner_reply,
+    request_counts_for_period,
     revoke_access_user,
     set_contact_exclusion,
     set_contact_template_override,
@@ -592,6 +594,47 @@ async def test_claiming_a_window_blocks_the_next_message_immediately(
 
     assert state.last_auto_reply_window_key == "2026-08-23:1"
     assert state.auto_reply_count_in_window == 2
+
+
+@pytest.mark.asyncio
+async def test_off_hours_request_is_idempotent_and_aggregated(session: AsyncSession) -> None:
+    connection_id = await stored_connection(session)
+    await record_incoming(session, connection_id, 100, at=NOW)
+
+    first = await record_off_hours_request(
+        session,
+        connection_id=connection_id,
+        contact_id=100,
+        tg_message_id=7,
+        category=None,
+        window_key="2026-08-23:1",
+        occurred_at=NOW,
+    )
+    repeated = await record_off_hours_request(
+        session,
+        connection_id=connection_id,
+        contact_id=100,
+        tg_message_id=7,
+        category="general",
+        window_key="2026-08-23:1",
+        occurred_at=NOW,
+    )
+    request = await session.get(models.ContactRequest, first)
+    assert request is not None
+    request.status = "paid"
+    activity = await session.get(models.ContactActivity, (connection_id, 100))
+
+    counts = await request_counts_for_period(
+        session,
+        connection_id=connection_id,
+        period_start=NOW - timedelta(minutes=1),
+        period_end=NOW + timedelta(minutes=1),
+    )
+
+    assert repeated == first
+    assert request.category == "general"
+    assert activity is not None and activity.off_hours_request_count == 1
+    assert counts == {100: (0, 1)}
 
 
 @pytest.mark.asyncio

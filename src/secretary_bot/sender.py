@@ -52,14 +52,24 @@ class BusinessReplySender:
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
     max_attempts: int = MAX_ATTEMPTS
 
-    async def send(self, *, business_connection_id: str, chat_id: int, text: str) -> SendResult:
+    async def send(
+        self,
+        *,
+        business_connection_id: str,
+        chat_id: int,
+        text: str,
+        reply_markup: Any | None = None,
+    ) -> SendResult:
         for attempt in range(1, self.max_attempts + 1):
             try:
-                sent = await self.bot.send_message(
+                kwargs: dict[str, Any] = dict(
                     business_connection_id=business_connection_id,
                     chat_id=chat_id,
                     text=text,
                 )
+                if reply_markup is not None:
+                    kwargs["reply_markup"] = reply_markup
+                sent = await self.bot.send_message(**kwargs)
             except TelegramRetryAfter as exc:
                 # Flood control: wait out the window Telegram named, then retry.
                 if attempt == self.max_attempts:

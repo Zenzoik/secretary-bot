@@ -139,6 +139,29 @@ async def test_daily_summary_sends_active_dialogue_once_and_persists_items(datab
                 occurred_at=SCHEDULED - timedelta(hours=1),
             )
         )
+        session.add_all(
+            [
+                models.ContactRequest(
+                    connection_id=connection.id,
+                    contact_id=100,
+                    tg_message_id=10,
+                    occurred_at=SCHEDULED - timedelta(hours=1),
+                    offer_expires_at=SCHEDULED + timedelta(hours=23),
+                ),
+                models.ContactRequest(
+                    connection_id=connection.id,
+                    contact_id=100,
+                    tg_message_id=12,
+                    occurred_at=SCHEDULED - timedelta(minutes=30),
+                    offer_expires_at=SCHEDULED + timedelta(hours=23),
+                    status="paid",
+                    price_amount=250,
+                    currency="UAH",
+                    paid_at=SCHEDULED - timedelta(minutes=29),
+                    owner_decision="pending",
+                ),
+            ]
+        )
         # Still encrypted but outside the 24-hour summary period.
         await seed_message(
             session,
@@ -170,6 +193,7 @@ async def test_daily_summary_sends_active_dialogue_once_and_persists_items(datab
     assert len(bot.sent) == 2
     assert all(message["chat_id"] == -100123 for message in bot.sent)
     assert "💸 Відповісти вранці: 1" in bot.sent[0]["text"]
+    assert "1 звичайних · 1 платних" in bot.sent[0]["text"]
     header_button = bot.sent[0]["reply_markup"].inline_keyboard[0][0]
     assert header_button.callback_data == "summary:read:1"
     item_buttons = bot.sent[1]["reply_markup"].inline_keyboard
@@ -179,6 +203,7 @@ async def test_daily_summary_sends_active_dialogue_once_and_persists_items(datab
     assert "Строк оплати" in bot.sent[1]["text"]
     assert "Обіцяли відповісти вранці" in bot.sent[1]["text"]
     assert "немає" in bot.sent[1]["text"]
+    assert "Поза графіком: 1 звичайних · 1 платних" in bot.sent[1]["text"]
 
     async with database.session() as session:
         run = await session.scalar(select(models.SummaryRun))
@@ -190,6 +215,8 @@ async def test_daily_summary_sends_active_dialogue_once_and_persists_items(datab
     assert item.contact_username == "client_test"
     assert item.money_priority is True
     assert item.last_incoming_message_id == 10
+    assert item.normal_request_count == 1
+    assert item.paid_request_count == 1
     assert morning is not None and morning.is_delivered is True
 
 

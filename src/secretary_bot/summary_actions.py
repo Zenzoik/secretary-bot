@@ -20,7 +20,7 @@ from secretary_bot.actions import LogAction
 from secretary_bot.callbacks import finalize_callback
 from secretary_bot.daily_summary import summary_item_keyboard
 from secretary_bot.retention import MESSAGE_RETENTION, MessageCipher, MessageContext
-from secretary_bot.sender import BusinessReplySender
+from secretary_bot.sender import BusinessReplySender, SendOutcome
 from secretary_bot.storage import (
     ConnectionRecord,
     Database,
@@ -148,9 +148,15 @@ class SummaryActions:
             text=text,
         )
         if not result.is_sent:
+            failure = (
+                "⚠️ 24-годинне вікно Telegram для цього контакту закрите. "
+                "Попросіть клієнта надіслати нове повідомлення."
+                if result.outcome is SendOutcome.CHAT_INACTIVE
+                else "⚠️ Не вдалося надіслати відповідь. Спробуйте ще раз."
+            )
             await self.bot.send_message(
                 chat_id=sender.id,
-                text="⚠️ Не вдалося надіслати відповідь. Спробуйте ще раз.",
+                text=failure,
             )
             return True
 

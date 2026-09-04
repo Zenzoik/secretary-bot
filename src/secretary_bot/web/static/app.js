@@ -128,6 +128,19 @@
     renderDelayRanges();
   }
 
+  function fillEscalation() {
+    const form = $("#escalation-form");
+    const data = state.bootstrap.escalation;
+    form.elements.enabled.checked = data.enabled;
+    form.elements.price_amount.value = data.price_amount;
+    form.elements.currency.value = data.currency;
+    form.elements.offer_text.value = data.offer_text;
+    form.elements.confirm_text.value = data.confirm_text;
+    form.elements.decline_text.value = data.decline_text;
+    $("#escalation-badge").textContent = data.enabled ? "Увімкнено" : "Вимкнено";
+    $("#escalation-badge").classList.toggle("neutral", !data.enabled);
+  }
+
   function renderDelayRanges() {
     const form = $("#delivery-form");
     const ownerMin = form.elements.delay_min_seconds.value;
@@ -256,7 +269,7 @@
       list.innerHTML = '<div class="empty-row">Контакти з’являться після першого вхідного повідомлення.</div>';
       return;
     }
-    list.innerHTML = state.contacts.map((contact) => `<button type="button" class="contact-item ${state.selectedContact?.contact_id === contact.contact_id ? "active" : ""}" data-contact-id="${contact.contact_id}"><strong>${escapeHtml(contact.contact_name || `Контакт ${contact.contact_id}`)}</strong><small>${formatDate(contact.last_incoming_at)} · ${contact.auto_reply_count} відповідей</small></button>`).join("");
+    list.innerHTML = state.contacts.map((contact) => `<button type="button" class="contact-item ${state.selectedContact?.contact_id === contact.contact_id ? "active" : ""}" data-contact-id="${contact.contact_id}"><strong>${escapeHtml(contact.contact_name || `Контакт ${contact.contact_id}`)}</strong><small>${formatDate(contact.last_incoming_at)} · ${contact.auto_reply_count} відповідей · ${contact.paid_escalation_count}/${contact.off_hours_request_count} платних</small></button>`).join("");
     $$(".contact-item", list).forEach((button) => button.addEventListener("click", () => selectContact(Number(button.dataset.contactId))));
   }
 
@@ -298,6 +311,11 @@
       const rawLimit = Number(form.elements.max_auto_replies_per_window.value);
       state.bootstrap.delivery = await api("/api/v1/delivery", { method: "PUT", body: JSON.stringify({ sender_identity: form.elements.sender_identity.value, delay_min_seconds: Number(form.elements.delay_min_seconds.value), delay_max_seconds: Number(form.elements.delay_max_seconds.value), bot_delay_seconds: Number(form.elements.bot_delay_seconds.value), mark_read: form.elements.mark_read.checked, max_auto_replies_per_window: rawLimit || null }) });
       renderStatus();
+    }); });
+    $("#escalation-form").addEventListener("submit", (event) => { event.preventDefault(); submit(event.currentTarget, async () => {
+      const form = event.currentTarget;
+      state.bootstrap.escalation = await api("/api/v1/escalation", { method: "PUT", body: JSON.stringify({ enabled: form.elements.enabled.checked, price_amount: form.elements.price_amount.value, currency: form.elements.currency.value.trim().toUpperCase(), offer_text: form.elements.offer_text.value, confirm_text: form.elements.confirm_text.value, decline_text: form.elements.decline_text.value }) });
+      fillEscalation();
     }); });
     $("#add-schedule-window").addEventListener("click", () => createWindow($("#schedule-windows")));
     $("#schedule-form").addEventListener("submit", (event) => { event.preventDefault(); submit(event.currentTarget, async () => {
@@ -395,7 +413,7 @@
     $("#loading-state").classList.add("hidden");
     $("#views").classList.remove("hidden");
     if (!tg?.initData) $("#logout").classList.remove("hidden");
-    renderStatus(); fillDelivery(); fillSchedule(); fillTemplates(); fillClassifier(); fillSummary();
+    renderStatus(); fillDelivery(); fillEscalation(); fillSchedule(); fillTemplates(); fillClassifier(); fillSummary();
     const requested = location.hash.slice(1);
     navigate(titles[requested] ? requested : "overview");
     $("#app").setAttribute("aria-busy", "false");

@@ -9,9 +9,9 @@
     <meta property="og:description" content="Налаштування без зайвих кроків">
     <meta property="og:image" content="{{BASE_URL}}/assets/og.png">
     <title>Personal Secretary — налаштування</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260904-4">
+    <link rel="stylesheet" href="/assets/styles.css?v=20260904-5">
     <script src="https://telegram.org/js/telegram-web-app.js?59"></script>
-    <script src="/assets/app.js?v=20260904-4" defer></script>
+    <script src="/assets/app.js?v=20260904-5" defer></script>
   </head>
   <body>
     <div class="app-shell" id="app" aria-busy="true">
@@ -94,6 +94,22 @@
                 <small>0 — без обмежень: бот обробляє кожне підтримуване повідомлення.</small>
               </label>
               <div class="form-actions"><button class="primary" type="submit">Зберегти доставку</button></div>
+            </form>
+            <form class="panel" id="escalation-form">
+              <div class="panel-heading">
+                <div><p class="eyebrow">Поза графіком</p><h2>Платне термінове звернення</h2></div>
+                <span class="badge neutral" id="escalation-badge">Вимкнено</span>
+              </div>
+              <p class="muted">Після звичайної автовідповіді клієнт побачить кнопку «Терміново». Платне звернення зараховується лише після окремого підтвердження ціни.</p>
+              <label class="switch-row"><span><strong>Дозволити платну ескалацію</strong><small>Без підтвердження клієнта лічильник не збільшується</small></span><input name="enabled" type="checkbox" role="switch"></label>
+              <div class="form-grid two">
+                <label>Ціна<input name="price_amount" type="number" min="0" max="1000000000" step="0.01" required></label>
+                <label>Валюта<input name="currency" minlength="3" maxlength="8" pattern="[A-Z]{3,8}" placeholder="UAH" required></label>
+              </div>
+              <label>Текст пропозиції<textarea name="offer_text" rows="3" maxlength="1000" required></textarea></label>
+              <label>Текст після підтвердження<textarea name="confirm_text" rows="3" maxlength="1000" required></textarea></label>
+              <label>Текст відмови власника<textarea name="decline_text" rows="3" maxlength="1000" required></textarea></label>
+              <div class="form-actions"><button class="primary" type="submit">Зберегти ескалацію</button></div>
             </form>
           </section>
 

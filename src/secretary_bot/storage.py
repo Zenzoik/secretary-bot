@@ -50,6 +50,12 @@ class ConnectionRecord:
     delay_max_seconds: int
     bot_delay_seconds: int
     max_auto_replies_per_window: int | None
+    escalation_enabled: bool
+    escalation_price_amount: Decimal
+    escalation_currency: str
+    escalation_offer_text: str
+    escalation_confirm_text: str
+    escalation_decline_text: str
     mark_read: bool
     summary_time: time
     summary_channel_id: int | None
@@ -926,6 +932,81 @@ async def record_incoming(
     await _touch_activity(session, connection_id, contact_id, **values)
 
 
+async def record_off_hours_request(
+    session: AsyncSession,
+    *,
+    connection_id: int,
+    contact_id: int,
+    tg_message_id: int,
+    category: str | None,
+    window_key: str | None,
+    occurred_at: datetime,
+) -> int:
+    """Create one immutable off-hours request per incoming Telegram message."""
+    existing = await session.scalar(
+        select(models.ContactRequest).where(
+            models.ContactRequest.connection_id == connection_id,
+            models.ContactRequest.tg_message_id == tg_message_id,
+        )
+    )
+    if existing is not None:
+        if category is not None and existing.category is None:
+            existing.category = category
+        return existing.id
+    row = models.ContactRequest(
+        connection_id=connection_id,
+        contact_id=contact_id,
+        tg_message_id=tg_message_id,
+        category=category,
+        window_key=window_key,
+        occurred_at=occurred_at,
+        offer_expires_at=occurred_at + timedelta(hours=24),
+    )
+    session.add(row)
+    activity = await session.get(models.ContactActivity, (connection_id, contact_id))
+    if activity is None:
+        activity = models.ContactActivity(connection_id=connection_id, contact_id=contact_id)
+        session.add(activity)
+    activity.off_hours_request_count += 1
+    await session.flush()
+    return row.id
+
+
+async def set_request_reply_message(
+    session: AsyncSession, request_id: int, message_id: int | None
+) -> None:
+    row = await session.get(models.ContactRequest, request_id)
+    if row is not None:
+        row.bot_reply_message_id = message_id
+        await session.flush()
+
+
+async def request_counts_for_period(
+    session: AsyncSession,
+    *,
+    connection_id: int,
+    period_start: datetime,
+    period_end: datetime,
+) -> dict[int, tuple[int, int]]:
+    rows = await session.execute(
+        select(
+            models.ContactRequest.contact_id,
+            func.count(),
+            func.count().filter(models.ContactRequest.status == "paid"),
+        )
+        .where(
+            models.ContactRequest.connection_id == connection_id,
+            models.ContactRequest.occurred_at >= period_start,
+            models.ContactRequest.occurred_at < period_end,
+        )
+        .group_by(models.ContactRequest.contact_id)
+    )
+    return {
+        contact_id: (total - paid, paid)
+        for contact_id, total, paid in rows
+    }
+
+
 def normalize_contact_username(username: str | None) -> str | None:
     """Return a Telegram username safe to embed in an official t.me link."""
     if not username:
@@ -1116,6 +1197,12 @@ async def _record(session: AsyncSession, row: models.Connection) -> ConnectionRe
         delay_max_seconds=row.delay_max_seconds,
         bot_delay_seconds=row.bot_delay_seconds,
         max_auto_replies_per_window=row.max_auto_replies_per_window,
+        escalation_enabled=row.escalation_enabled,
+        escalation_price_amount=row.escalation_price_amount,
+        escalation_currency=row.escalation_currency,
+        escalation_offer_text=row.escalation_offer_text,
+        escalation_confirm_text=row.escalation_confirm_text,
+        escalation_decline_text=row.escalation_decline_text,
         mark_read=row.mark_read,
         summary_time=row.summary_time,
         summary_channel_id=row.summary_channel_id,

@@ -95,6 +95,10 @@ class Connection(Base):
             "max_auto_replies_per_window BETWEEN 1 AND 100",
             name="max_auto_replies_per_window_range",
         ),
+        CheckConstraint(
+            "escalation_price_amount >= 0",
+            name="escalation_price_amount_nonnegative",
+        ),
     )
 
     id: Mapped[int] = mapped_column(SURROGATE_KEY, primary_key=True, autoincrement=True)
@@ -112,6 +116,32 @@ class Connection(Base):
     delay_max_seconds: Mapped[int] = mapped_column(SmallInteger, server_default=sql_text("60"))
     bot_delay_seconds: Mapped[int] = mapped_column(SmallInteger, server_default=sql_text("5"))
     max_auto_replies_per_window: Mapped[int | None] = mapped_column(SmallInteger)
+    escalation_enabled: Mapped[bool] = mapped_column(
+        Boolean, server_default=sql_text("false")
+    )
+    escalation_price_amount: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), server_default=sql_text("0")
+    )
+    escalation_currency: Mapped[str] = mapped_column(Text, server_default=sql_text("'UAH'"))
+    escalation_offer_text: Mapped[str] = mapped_column(
+        Text,
+        server_default=sql_text(
+            "'Якщо відповідь потрібна терміново, можна створити платне звернення.'"
+        ),
+    )
+    escalation_confirm_text: Mapped[str] = mapped_column(
+        Text,
+        server_default=sql_text(
+            "'Платне звернення підтверджено. Зв’язок не гарантовано, але звернення "
+            "буде враховано в рахунку наприкінці місяця.'"
+        ),
+    )
+    escalation_decline_text: Mapped[str] = mapped_column(
+        Text,
+        server_default=sql_text(
+            "'На жаль, зараз немає можливості відповісти терміново.'"
+        ),
+    )
     mark_read: Mapped[bool] = mapped_column(Boolean, server_default=sql_text("false"))
     kill_switch: Mapped[bool] = mapped_column(Boolean, server_default=sql_text("false"))
     muted_until: Mapped[datetime | None] = mapped_column(UtcDateTime())
@@ -303,6 +333,53 @@ class ContactActivity(Base):
     quiet_window_reply_count: Mapped[int] = mapped_column(
         Integer, server_default=sql_text("0")
     )
+    off_hours_request_count: Mapped[int] = mapped_column(
+        Integer, server_default=sql_text("0")
+    )
+    paid_escalation_count: Mapped[int] = mapped_column(
+        Integer, server_default=sql_text("0")
+    )
+
+
+class ContactRequest(Base):
+    __tablename__ = "contact_requests"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('normal', 'offered', 'paid')",
+            name="status_values",
+        ),
+        CheckConstraint(
+            "owner_decision IS NULL OR owner_decision IN ('pending', 'declined')",
+            name="owner_decision_values",
+        ),
+        UniqueConstraint("connection_id", "tg_message_id"),
+        Index(
+            "ix_contact_requests_connection_contact_occurred",
+            "connection_id",
+            "contact_id",
+            sql_text("occurred_at DESC"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(SURROGATE_KEY, primary_key=True, autoincrement=True)
+    connection_id: Mapped[int] = mapped_column(
+        ForeignKey("connections.id", ondelete="CASCADE"), index=True
+    )
+    contact_id: Mapped[int] = mapped_column(BigInteger)
+    tg_message_id: Mapped[int] = mapped_column(BigInteger)
+    category: Mapped[str | None] = mapped_column(Text)
+    window_key: Mapped[str | None] = mapped_column(Text)
+    occurred_at: Mapped[datetime] = mapped_column(UtcDateTime(), index=True)
+    status: Mapped[str] = mapped_column(Text, server_default=sql_text("'normal'"))
+    price_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    currency: Mapped[str | None] = mapped_column(Text)
+    offer_expires_at: Mapped[datetime] = mapped_column(UtcDateTime(), index=True)
+    paid_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
+    owner_decision: Mapped[str | None] = mapped_column(Text)
+    owner_decided_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
+    bot_reply_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    owner_notification_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
 
 
 class WebSession(Base):
@@ -423,6 +500,8 @@ class SummaryItem(Base):
     )
     questions_asked: Mapped[int] = mapped_column(Integer, server_default=sql_text("0"))
     questions_closed: Mapped[int] = mapped_column(Integer, server_default=sql_text("0"))
+    normal_request_count: Mapped[int] = mapped_column(Integer, server_default=sql_text("0"))
+    paid_request_count: Mapped[int] = mapped_column(Integer, server_default=sql_text("0"))
     money_priority: Mapped[bool] = mapped_column(Boolean, server_default=sql_text("false"))
     last_incoming_message_id: Mapped[int | None] = mapped_column(BigInteger)
     telegram_message_id: Mapped[int | None] = mapped_column(BigInteger)

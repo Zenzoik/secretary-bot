@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from secretary_bot.actions import LogAction
 from secretary_bot.classifier import Category, ClassifierSettings, LanguageModel, classify
 from secretary_bot.delayed import MAX_DELAY_SECONDS, DelayedReplyQueue, ReplyTask, reply_delay
+from secretary_bot.escalation import escalation_offer_keyboard
 from secretary_bot.gate import GateDecision, evaluate_gate
 from secretary_bot.hard_filter import HardFilterResult
 from secretary_bot.notifications import OwnerNotifier, Preview
@@ -35,7 +36,9 @@ from secretary_bot.storage import (
     owner_replied_since,
     record_auto_reply,
     record_incoming,
+    record_off_hours_request,
     record_owner_reply,
+    set_request_reply_message,
 )
 from secretary_bot.templates import TemplateCode, render, template_for
 from secretary_bot.texts import CONNECTION_LOST_ALERT, as_bot_reply
@@ -130,6 +133,16 @@ class Pipeline:
             }:
                 await self._capture_incoming(session, connection, incoming, direction="in")
             if gate.decision is not GateDecision.ALLOWED:
+                if gate.decision is GateDecision.SKIPPED_WINDOW_LIMIT:
+                    await record_off_hours_request(
+                        session,
+                        connection_id=connection.id,
+                        contact_id=incoming.contact_id,
+                        tg_message_id=incoming.message_id,
+                        category=None,
+                        window_key=gate.window_key,
+                        occurred_at=incoming.received_at,
+                    )
                 await self._log(session, connection, incoming, LogAction(gate.decision.value))
                 return
 
@@ -142,6 +155,15 @@ class Pipeline:
             classification = await classify(incoming.text, model=self.model, settings=settings)
             forced_template = await load_forced_template_code(
                 session, connection.id, incoming.contact_id
+            )
+            request_id = await record_off_hours_request(
+                session,
+                connection_id=connection.id,
+                contact_id=incoming.contact_id,
+                tg_message_id=incoming.message_id,
+                category=classification.category.value,
+                window_key=gate.window_key,
+                occurred_at=incoming.received_at,
             )
 
         task = ReplyTask(
@@ -159,6 +181,7 @@ class Pipeline:
             else str(classification.confidence),
             window_key=gate.window_key,
             contact_name=incoming.contact_name,
+            request_id=request_id,
         )
         if connection.sender_identity == "bot":
             delay = reply_delay(
@@ -217,10 +240,18 @@ class Pipeline:
     async def _send(
         self, connection: ConnectionRecord, task: ReplyTask, text: str, *, at: datetime
     ) -> LogAction:
+        reply_markup = (
+            escalation_offer_keyboard(task.request_id)
+            if connection.escalation_enabled
+            and connection.escalation_price_amount > 0
+            and task.request_id is not None
+            else None
+        )
         result = await self.sender.send(
             business_connection_id=connection.business_connection_id,
             chat_id=task.chat_id,
             text=text,
+            reply_markup=reply_markup,
         )
         async with self.database.session() as session, session.begin():
             if not result.is_sent:
@@ -231,6 +262,10 @@ class Pipeline:
                 await record_auto_reply(
                     session, connection.id, task.contact_id, at=at, window_key=task.window_key
                 )
+                if task.request_id is not None:
+                    await set_request_reply_message(
+                        session, task.request_id, result.message_id
+                    )
                 await self._log_task(
                     session,
                     connection,

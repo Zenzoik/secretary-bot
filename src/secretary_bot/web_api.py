@@ -80,6 +80,21 @@ class DeliveryPayload(BaseModel):
         return self
 
 
+class EscalationPayload(BaseModel):
+    enabled: bool
+    price_amount: Annotated[Decimal, Field(ge=0, le=1_000_000_000)]
+    currency: Annotated[str, Field(pattern=r"^[A-Z]{3,8}$")]
+    offer_text: Annotated[str, Field(min_length=1, max_length=1000)]
+    confirm_text: Annotated[str, Field(min_length=1, max_length=1000)]
+    decline_text: Annotated[str, Field(min_length=1, max_length=1000)]
+
+    @model_validator(mode="after")
+    def validate_price(self) -> EscalationPayload:
+        if self.enabled and self.price_amount <= 0:
+            raise ValueError("Для платних звернень вкажіть ціну більшу за нуль")
+        return self
+
+
 class SchedulePayload(BaseModel):
     timezone: Annotated[str, Field(min_length=1, max_length=64)]
     windows: Annotated[list[WindowPayload], Field(min_length=1, max_length=MAX_WINDOWS)]
@@ -252,6 +267,22 @@ def build_web_router(
             )
             await session.refresh(principal.connection)
             return _delivery(principal.connection)
+
+    @router.put("/api/v1/escalation")
+    async def update_escalation(
+        request: Request, payload: EscalationPayload
+    ) -> dict[str, Any]:
+        async with database.session() as session, session.begin():
+            principal = await api.authorize(session, request)
+            connection = principal.connection
+            connection.escalation_enabled = payload.enabled
+            connection.escalation_price_amount = payload.price_amount
+            connection.escalation_currency = payload.currency
+            connection.escalation_offer_text = payload.offer_text.strip()
+            connection.escalation_confirm_text = payload.confirm_text.strip()
+            connection.escalation_decline_text = payload.decline_text.strip()
+            await session.flush()
+            return _escalation(connection)
 
     @router.put("/api/v1/schedule")
     async def update_schedule(request: Request, payload: SchedulePayload) -> dict[str, Any]:
@@ -571,6 +602,7 @@ async def _bootstrap(session: AsyncSession, principal: Principal) -> dict[str, A
             "rights": dict(principal.connection.rights_json or {}),
         },
         "delivery": _delivery(principal.connection),
+        "escalation": _escalation(principal.connection),
         "schedule": await _schedule(session, principal.connection),
         "templates": await _templates(session, principal.connection.id),
         "classifier": await _classifier(session, principal.connection.id),
@@ -586,6 +618,17 @@ def _delivery(connection: models.Connection) -> dict[str, Any]:
         "bot_delay_seconds": connection.bot_delay_seconds,
         "mark_read": connection.mark_read,
         "max_auto_replies_per_window": connection.max_auto_replies_per_window,
+    }
+
+
+def _escalation(connection: models.Connection) -> dict[str, Any]:
+    return {
+        "enabled": connection.escalation_enabled,
+        "price_amount": str(connection.escalation_price_amount),
+        "currency": connection.escalation_currency,
+        "offer_text": connection.escalation_offer_text,
+        "confirm_text": connection.escalation_confirm_text,
+        "decline_text": connection.escalation_decline_text,
     }
 
 
@@ -725,6 +768,8 @@ async def _contact(session: AsyncSession, connection_id: int, contact_id: int) -
         "last_incoming_at": _iso(activity.last_incoming_at),
         "last_auto_reply_at": _iso(activity.last_auto_reply_at),
         "auto_reply_count": replies or 0,
+        "off_hours_request_count": activity.off_hours_request_count,
+        "paid_escalation_count": activity.paid_escalation_count,
         "exclusion": "none"
         if exclusion is None
         else "forever"
