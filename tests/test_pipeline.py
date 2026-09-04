@@ -109,6 +109,7 @@ def message(**changes: Any) -> IncomingMessage:
         received_at=NIGHT,
         text="привет, ты тут?",
         contact_name="Вася",
+        contact_username="vasya_test",
     )
     return replace(base, **changes)
 
@@ -318,6 +319,10 @@ async def test_money_message_lands_in_the_morning_queue(world) -> None:
     assert row is not None
     assert row.contact_name == "Вася"
     assert row.is_delivered is False
+
+    async with database.session() as session:
+        activity = await session.get(models.ContactActivity, (1, 100))
+    assert activity is not None and activity.contact_username == "vasya_test"
 
 
 @pytest.mark.asyncio

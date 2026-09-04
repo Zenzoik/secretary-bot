@@ -129,7 +129,7 @@ class DailySummary:
             sent = await self.bot.send_message(
                 chat_id=destination,
                 text=render_summary_item(item),
-                reply_markup=summary_item_keyboard(item.id, item.contact_id),
+                reply_markup=summary_item_keyboard(item.id, item.contact_username),
             )
             await self._save_item_message(item.id, getattr(sent, "message_id", None))
         await self._mark_delivered(run_id, delivered_at=now)
@@ -184,6 +184,7 @@ class DailySummary:
                     run_id=run_id,
                     contact_id=dialogue.contact_id,
                     contact_name=dialogue.contact_name,
+                    contact_username=dialogue.contact_username,
                     topic=summary.topic,
                     agreements_json=list(summary.agreements),
                     open_questions_json=list(summary.open_questions),
@@ -350,16 +351,24 @@ def summary_header_keyboard(run_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def summary_item_keyboard(item_id: int, contact_id: int) -> InlineKeyboardMarkup:
+def summary_item_keyboard(
+    item_id: int, contact_username: str | None = None
+) -> InlineKeyboardMarkup:
+    open_button = (
+        InlineKeyboardButton(
+            text="💬 Перейти в чат",
+            url=f"https://t.me/{contact_username}",
+        )
+        if contact_username
+        else InlineKeyboardButton(
+            text="💬 Перейти в чат",
+            callback_data=f"summary:open:{item_id}",
+        )
+    )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="✅ Resolve", callback_data=f"summary:resolve:{item_id}")],
-            [
-                InlineKeyboardButton(
-                    text="💬 Перейти в чат",
-                    url=f"tg://openmessage?user_id={contact_id}",
-                )
-            ],
+            [open_button],
             [
                 InlineKeyboardButton(
                     text="🤖 Відповісти від бота", callback_data=f"summary:reply:{item_id}"

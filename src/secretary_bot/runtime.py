@@ -153,6 +153,7 @@ async def _handle_business_message(
         received_at=message.date.astimezone(UTC) if message.date else datetime.now(UTC),
         text=message.text or "",
         contact_name=_contact_name(message),
+        contact_username=_contact_username(message),
     )
     await state.pipeline.process_incoming(incoming)
 
@@ -260,6 +261,11 @@ def _contact_name(message: Message) -> str | None:
     if sender is None:
         return message.chat.first_name
     return sender.full_name
+
+
+def _contact_username(message: Message) -> str | None:
+    sender = message.from_user
+    return sender.username if sender is not None else message.chat.username
 
 
 def _log_connection(

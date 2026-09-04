@@ -289,6 +289,7 @@ class ContactActivity(Base):
     )
     contact_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     contact_name: Mapped[str | None] = mapped_column(Text)
+    contact_username: Mapped[str | None] = mapped_column(Text)
     last_incoming_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
     owner_last_reply_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
     last_auto_reply_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
@@ -403,6 +404,7 @@ class SummaryItem(Base):
     )
     contact_id: Mapped[int] = mapped_column(BigInteger)
     contact_name: Mapped[str | None] = mapped_column(Text)
+    contact_username: Mapped[str | None] = mapped_column(Text)
     topic: Mapped[str] = mapped_column(Text)
     agreements_json: Mapped[list[str]] = mapped_column(
         JSON_DOCUMENT, server_default=sql_text("'[]'"), default=list

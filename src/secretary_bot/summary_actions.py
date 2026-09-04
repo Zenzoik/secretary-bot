@@ -11,6 +11,7 @@ from sqlalchemy import delete, select, update
 from secretary_bot import models
 from secretary_bot.actions import LogAction
 from secretary_bot.callbacks import finalize_callback
+from secretary_bot.daily_summary import summary_item_keyboard
 from secretary_bot.retention import MESSAGE_RETENTION, MessageCipher, MessageContext
 from secretary_bot.sender import BusinessReplySender
 from secretary_bot.storage import (
@@ -20,6 +21,7 @@ from secretary_bot.storage import (
     load_access_user,
     load_owner_connection,
     log_decision,
+    normalize_contact_username,
     record_owner_reply,
 )
 from secretary_bot.texts import as_bot_reply
@@ -35,6 +37,8 @@ class SummaryActionBot(Protocol):
     async def edit_message_text(self, **kwargs: Any) -> Any: ...
 
     async def edit_message_reply_markup(self, **kwargs: Any) -> Any: ...
+
+    async def get_chat(self, chat_id: int | str) -> Any: ...
 
 
 @dataclass(slots=True)
@@ -56,6 +60,8 @@ class SummaryActions:
             return await self._resolve(query, item_id=target_id, now=moment)
         if action == "reply":
             return await self._request_reply(query, item_id=target_id, now=moment)
+        if action == "open":
+            return await self._open_chat(query, item_id=target_id)
         return await self._read_all(query, run_id=target_id)
 
     async def handle_message(self, message: Message, *, now: datetime | None = None) -> bool:
@@ -258,13 +264,67 @@ class SummaryActions:
         )
         return True
 
+    async def _open_chat(self, query: CallbackQuery, *, item_id: int) -> bool:
+        async with self.database.session() as session:
+            target = await _owned_item(
+                session, owner_user_id=query.from_user.id, item_id=item_id
+            )
+            if target is None:
+                return False
+            item, _ = target
+            contact_id = item.contact_id
+
+        try:
+            chat = await self.bot.get_chat(contact_id)
+            username = normalize_contact_username(getattr(chat, "username", None))
+        except Exception:
+            username = None
+
+        if username is None:
+            await self.bot.answer_callback_query(
+                query.id,
+                text=(
+                    "У контакту немає публічного username. Прямий перехід "
+                    "недоступний — скористайтеся «Відповісти від бота»."
+                ),
+                show_alert=True,
+            )
+            return True
+
+        async with self.database.session() as session, session.begin():
+            target = await _owned_item(
+                session, owner_user_id=query.from_user.id, item_id=item_id
+            )
+            if target is None:
+                return False
+            item, connection = target
+            item.contact_username = username
+            activity = await session.get(
+                models.ContactActivity, (connection.id, item.contact_id)
+            )
+            if activity is not None:
+                activity.contact_username = username
+
+        if query.message is not None:
+            with contextlib.suppress(Exception):
+                await self.bot.edit_message_reply_markup(
+                    chat_id=query.message.chat.id,
+                    message_id=query.message.message_id,
+                    reply_markup=summary_item_keyboard(item_id, username),
+                )
+        await self.bot.answer_callback_query(
+            query.id,
+            text="Посилання оновлено. Натисніть «Перейти в чат» ще раз.",
+        )
+        return True
+
 
 def parse_summary_callback(data: str | None) -> tuple[str, int] | None:
     parts = (data or "").split(":")
     if (
         len(parts) != 3
         or parts[0] != "summary"
-        or parts[1] not in {"resolve", "reply", "read"}
+        or parts[1] not in {"resolve", "reply", "read", "open"}
         or not parts[2].isdigit()
     ):
         return None

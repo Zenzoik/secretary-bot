@@ -23,6 +23,7 @@ class FakeBot:
         self.read: list[dict[str, Any]] = []
         self.answered: list[dict[str, Any]] = []
         self.edited: list[dict[str, Any]] = []
+        self.chat_username: str | None = "first_contact"
 
     async def send_message(self, **kwargs: Any) -> Any:
         self.sent.append(kwargs)
@@ -43,6 +44,9 @@ class FakeBot:
     async def edit_message_reply_markup(self, **kwargs: Any) -> bool:
         self.edited.append(kwargs)
         return True
+
+    async def get_chat(self, chat_id: int | str) -> Any:
+        return type("Chat", (), {"id": chat_id, "username": self.chat_username})()
 
 
 def callback(data: str, *, owner_id: int = 42, message_id: int = 50) -> CallbackQuery:
@@ -200,6 +204,36 @@ async def test_read_all_marks_only_dialogues_from_this_summary(database) -> None
 
 
 @pytest.mark.asyncio
+async def test_open_chat_replaces_fallback_with_official_username_link(database) -> None:
+    _, item_id, _ = await seed_summary(database)
+    bot = FakeBot()
+    handler = actions(database, bot)
+
+    assert await handler.handle_callback(callback(f"summary:open:{item_id}"), now=NOW)
+
+    button = bot.edited[-1]["reply_markup"].inline_keyboard[1][0]
+    assert button.url == "https://t.me/first_contact"
+    assert "Натисніть" in bot.answered[-1]["text"]
+    async with database.session() as session:
+        item = await session.get(models.SummaryItem, item_id)
+    assert item is not None and item.contact_username == "first_contact"
+
+
+@pytest.mark.asyncio
+async def test_open_chat_explains_when_contact_has_no_public_username(database) -> None:
+    _, item_id, _ = await seed_summary(database)
+    bot = FakeBot()
+    bot.chat_username = None
+    handler = actions(database, bot)
+
+    assert await handler.handle_callback(callback(f"summary:open:{item_id}"), now=NOW)
+
+    assert bot.edited == []
+    assert bot.answered[-1]["show_alert"] is True
+    assert "немає публічного username" in bot.answered[-1]["text"]
+
+
+@pytest.mark.asyncio
 async def test_summary_action_from_another_user_is_rejected(database) -> None:
     run_id, item_id, _ = await seed_summary(database)
     bot = FakeBot()
@@ -220,6 +254,7 @@ async def test_summary_action_from_another_user_is_rejected(database) -> None:
         ("summary:resolve:7", ("resolve", 7)),
         ("summary:reply:8", ("reply", 8)),
         ("summary:read:9", ("read", 9)),
+        ("summary:open:10", ("open", 10)),
         ("summary:unknown:1", None),
         ("summary:read:0", None),
     ],

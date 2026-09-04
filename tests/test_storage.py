@@ -413,10 +413,18 @@ async def test_incoming_contact_name_is_kept_for_the_settings_list(
 ) -> None:
     connection_id = await stored_connection(session)
 
-    await record_incoming(session, connection_id, 100, at=NOW, contact_name="Test Contact")
+    await record_incoming(
+        session,
+        connection_id,
+        100,
+        at=NOW,
+        contact_name="Test Contact",
+        contact_username="@test_contact",
+    )
     activity = await session.get(models.ContactActivity, (connection_id, 100))
 
     assert activity is not None and activity.contact_name == "Test Contact"
+    assert activity.contact_username == "test_contact"
 
 
 @pytest.mark.asyncio

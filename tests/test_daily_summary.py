@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from secretary_bot import models
 from secretary_bot.classifier import ClassifierSettings
-from secretary_bot.daily_summary import DailySummary, summary_period
+from secretary_bot.daily_summary import DailySummary, summary_item_keyboard, summary_period
 from secretary_bot.retention import MESSAGE_RETENTION, MessageCipher, MessageContext
 from secretary_bot.storage import (
     ConnectionSnapshot,
@@ -49,6 +49,13 @@ class FakeModel:
             },
             ensure_ascii=False,
         )
+
+
+def test_summary_chat_button_uses_callback_without_known_username() -> None:
+    button = summary_item_keyboard(7).inline_keyboard[1][0]
+
+    assert button.url is None
+    assert button.callback_data == "summary:open:7"
 
 
 async def seed_message(
@@ -101,6 +108,7 @@ async def test_daily_summary_sends_active_dialogue_once_and_persists_items(datab
                 connection_id=connection.id,
                 contact_id=100,
                 contact_name="Клієнт",
+                contact_username="client_test",
             )
         )
         await seed_message(
@@ -166,7 +174,7 @@ async def test_daily_summary_sends_active_dialogue_once_and_persists_items(datab
     assert header_button.callback_data == "summary:read:1"
     item_buttons = bot.sent[1]["reply_markup"].inline_keyboard
     assert item_buttons[0][0].callback_data == "summary:resolve:1"
-    assert item_buttons[1][0].url == "tg://openmessage?user_id=100"
+    assert item_buttons[1][0].url == "https://t.me/client_test"
     assert item_buttons[2][0].callback_data == "summary:reply:1"
     assert "Строк оплати" in bot.sent[1]["text"]
     assert "Обіцяли відповісти вранці" in bot.sent[1]["text"]
@@ -179,6 +187,7 @@ async def test_daily_summary_sends_active_dialogue_once_and_persists_items(datab
     assert run is not None and run.status == "delivered"
     assert run.telegram_message_id == 1
     assert item is not None and item.telegram_message_id == 2
+    assert item.contact_username == "client_test"
     assert item.money_priority is True
     assert item.last_incoming_message_id == 10
     assert morning is not None and morning.is_delivered is True

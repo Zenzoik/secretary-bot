@@ -69,6 +69,7 @@ class RetainedDialogue:
     contact_id: int
     contact_name: str | None
     messages: tuple[DialogueMessage, ...]
+    contact_username: str | None = None
 
     @property
     def last_incoming_message_id(self) -> int | None:

@@ -886,12 +886,15 @@ async def load_retained_dialogues(
             models.ContactActivity.contact_id.in_(grouped),
         )
     )
-    names = {row.contact_id: row.contact_name for row in activity_rows}
+    contacts = {
+        row.contact_id: (row.contact_name, row.contact_username) for row in activity_rows
+    }
     return [
         RetainedDialogue(
             contact_id=contact_id,
-            contact_name=names.get(contact_id),
+            contact_name=contacts.get(contact_id, (None, None))[0],
             messages=tuple(messages),
+            contact_username=contacts.get(contact_id, (None, None))[1],
         )
         for contact_id, messages in grouped.items()
     ]
@@ -904,11 +907,30 @@ async def record_incoming(
     *,
     at: datetime,
     contact_name: str | None = None,
+    contact_username: str | None = None,
 ) -> None:
     values: dict[str, object] = {"last_incoming_at": at}
     if contact_name:
         values["contact_name"] = contact_name[:200]
+    normalized_username = normalize_contact_username(contact_username)
+    if normalized_username:
+        values["contact_username"] = normalized_username
     await _touch_activity(session, connection_id, contact_id, **values)
+
+
+def normalize_contact_username(username: str | None) -> str | None:
+    """Return a Telegram username safe to embed in an official t.me link."""
+    if not username:
+        return None
+    normalized = username.removeprefix("@").strip()
+    if not 1 <= len(normalized) <= 32:
+        return None
+    if not all(
+        character.isascii() and (character.isalnum() or character == "_")
+        for character in normalized
+    ):
+        return None
+    return normalized
 
 
 async def record_owner_reply(

@@ -54,6 +54,7 @@ class IncomingMessage:
     received_at: datetime
     text: str = ""
     contact_name: str | None = None
+    contact_username: str | None = None
 
     @property
     def contact_id(self) -> int:
@@ -102,6 +103,7 @@ class Pipeline:
                     incoming.contact_id,
                     at=incoming.received_at,
                     contact_name=incoming.contact_name,
+                    contact_username=incoming.contact_username,
                 )
                 await self._log(
                     session, connection, incoming, LogAction.SKIPPED_UNSUPPORTED_CONTENT
@@ -117,6 +119,7 @@ class Pipeline:
                 incoming.contact_id,
                 at=incoming.received_at,
                 contact_name=incoming.contact_name,
+                contact_username=incoming.contact_username,
             )
             contact = await load_contact_state(session, connection.id, incoming.contact_id)
             gate = evaluate_gate(connection.policy, contact, now=incoming.received_at)

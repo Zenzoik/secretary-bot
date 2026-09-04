@@ -153,6 +153,7 @@ async def test_retained_dialogues_only_include_active_rows_inside_period(session
             connection_id=connection_id,
             contact_id=200,
             contact_name="Контакт",
+            contact_username="contact_test",
         )
     )
     for message_id, direction, text, occurred_at, retention_until in (
@@ -186,5 +187,6 @@ async def test_retained_dialogues_only_include_active_rows_inside_period(session
 
     assert len(dialogues) == 1
     assert dialogues[0].contact_name == "Контакт"
+    assert dialogues[0].contact_username == "contact_test"
     assert [message.text for message in dialogues[0].messages] == ["Питання", "Відповідь"]
     assert dialogues[0].last_incoming_message_id == 10
