@@ -99,6 +99,7 @@
     $$("[data-view-panel]").forEach((panel) => panel.classList.toggle("active", panel.dataset.viewPanel === view));
     $("#page-title").textContent = titles[view];
     history.replaceState(null, "", `#${view}`);
+    $(`[data-view="${view}"]`)?.scrollIntoView({ block: "nearest", inline: "center" });
     if (view === "contacts") loadContacts();
     if (view === "logs") loadLogs();
   }
