@@ -11,6 +11,7 @@ BUTTON_ON = "▶️ Увімкнути"
 BUTTON_MUTE = "⏸ Пауза"
 BUTTON_LIVE = "⚠️ Увімкнути live"
 BUTTON_LIVE_ACTIVE = "🔴 Live увімкнено"
+BUTTON_SEND_BOT = "🤖 Відправити від бота"
 BUTTON_BACK = "↩️ Назад"
 BUTTON_LIVE_CONFIRM = "⚠️ Підтверджую live"
 BUTTON_CANCEL = "Скасувати"
@@ -98,6 +99,11 @@ PLACEHOLDER_SCOPE = "Підтвердьте область чатів"
 PLACEHOLDER_MAIN = "Керування секретарем"
 PLACEHOLDER_MUTE = "Виберіть тривалість паузи"
 PLACEHOLDER_LIVE = "Підтвердьте або скасуйте live"
+
+DIRECT_REPLY_SELECT = "Оберіть контакт, якому потрібно написати від бота:"
+DIRECT_REPLY_NO_CONTACTS = "Поки немає контактів, яким бот може написати."
+DIRECT_REPLY_NO_PERMISSION = "Бот не має права відповідати. Перевірте Chat Automation."
+DIRECT_REPLY_CANCELLED = "Надсилання скасовано."
 
 FEEDBACK_BUTTONS = (
     ("ok", "✅ Норм"),

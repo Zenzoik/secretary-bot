@@ -5,10 +5,17 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
-from aiogram.types import CallbackQuery, ForceReply, Message
+from aiogram.types import (
+    CallbackQuery,
+    ForceReply,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 from sqlalchemy import delete, select, update
 
 from secretary_bot import models
+from secretary_bot import texts as ui
 from secretary_bot.actions import LogAction
 from secretary_bot.callbacks import finalize_callback
 from secretary_bot.daily_summary import summary_item_keyboard
@@ -51,11 +58,20 @@ class SummaryActions:
     async def handle_callback(
         self, query: CallbackQuery, *, now: datetime | None = None
     ) -> bool:
+        direct = parse_direct_reply_callback(query.data)
+        moment = now or datetime.now(UTC)
+        if direct is not None:
+            action, contact_id = direct
+            if action == "select":
+                return await self._request_direct_reply(
+                    query, contact_id=contact_id, now=moment
+                )
+            return await self._cancel_direct_reply(query)
+
         parsed = parse_summary_callback(query.data)
         if parsed is None:
             return False
         action, target_id = parsed
-        moment = now or datetime.now(UTC)
         if action == "resolve":
             return await self._resolve(query, item_id=target_id, now=moment)
         if action == "reply":
@@ -69,31 +85,56 @@ class SummaryActions:
         if sender is None or message.chat.type != "private" or not message.text:
             return False
         moment = now or datetime.now(UTC)
+        if message.text.strip() == ui.BUTTON_SEND_BOT:
+            return await self._show_direct_reply_contacts(message)
+
         async with self.database.session() as session, session.begin():
             connection = await load_owner_connection(session, sender.id)
             if connection is None:
                 return False
-            state = await session.get(models.SummaryReplyState, connection.id)
-            if state is None:
+            direct_state = await session.get(models.DirectReplyState, connection.id)
+            summary_state = await session.get(models.SummaryReplyState, connection.id)
+            if direct_state is None and summary_state is None:
                 return False
             if message.text.startswith("/"):
-                await session.delete(state)
+                if direct_state is not None:
+                    await session.delete(direct_state)
+                if summary_state is not None:
+                    await session.delete(summary_state)
                 return False
-            if state.expires_at <= moment:
-                await session.delete(state)
-                expired = True
-                item = None
-            else:
-                replied_to = getattr(message.reply_to_message, "message_id", None)
-                if state.prompt_message_id is None or replied_to != state.prompt_message_id:
-                    return False
-                item = await session.get(models.SummaryItem, state.summary_item_id)
-                expired = item is None
 
-        if expired or item is None:
+            replied_to = getattr(message.reply_to_message, "message_id", None)
+            contact_id: int | None = None
+            if direct_state is not None:
+                if direct_state.expires_at <= moment:
+                    await session.delete(direct_state)
+                    expired = True
+                elif (
+                    direct_state.prompt_message_id is None
+                    or replied_to != direct_state.prompt_message_id
+                ):
+                    return False
+                else:
+                    contact_id = direct_state.contact_id
+                    expired = False
+            elif summary_state is not None and summary_state.expires_at <= moment:
+                await session.delete(summary_state)
+                expired = True
+            else:
+                assert summary_state is not None
+                if (
+                    summary_state.prompt_message_id is None
+                    or replied_to != summary_state.prompt_message_id
+                ):
+                    return False
+                item = await session.get(models.SummaryItem, summary_state.summary_item_id)
+                expired = item is None
+                contact_id = None if item is None else item.contact_id
+
+        if expired or contact_id is None:
             await self.bot.send_message(
                 chat_id=sender.id,
-                text="⌛ Запит на відповідь протерміновано. Натисніть кнопку в новому самарі.",
+                text="⌛ Запит на відповідь протерміновано. Запустіть надсилання ще раз.",
             )
             return True
 
@@ -103,7 +144,7 @@ class SummaryActions:
         text = as_bot_reply(reply_text)
         result = await self.sender.send(
             business_connection_id=connection.business_connection_id,
-            chat_id=item.contact_id,
+            chat_id=contact_id,
             text=text,
         )
         if not result.is_sent:
@@ -117,22 +158,20 @@ class SummaryActions:
             await log_decision(
                 session,
                 connection_id=connection.id,
-                contact_id=item.contact_id,
+                contact_id=contact_id,
                 tg_message_id=result.message_id,
                 direction="out",
                 action=LogAction.REPLIED,
                 occurred_at=moment,
             )
-            await record_owner_reply(session, connection.id, item.contact_id, at=moment)
+            await record_owner_reply(session, connection.id, contact_id, at=moment)
             if connection.message_retention_enabled and self.cipher is not None:
-                context = MessageContext(
-                    connection.id, item.contact_id, result.message_id, "out"
-                )
+                context = MessageContext(connection.id, contact_id, result.message_id, "out")
                 encrypted = self.cipher.encrypt(text, context=context)
                 await capture_message(
                     session,
                     connection_id=connection.id,
-                    contact_id=item.contact_id,
+                    contact_id=contact_id,
                     tg_message_id=result.message_id,
                     direction="out",
                     occurred_at=moment,
@@ -142,6 +181,11 @@ class SummaryActions:
             await session.execute(
                 delete(models.SummaryReplyState).where(
                     models.SummaryReplyState.connection_id == connection.id
+                )
+            )
+            await session.execute(
+                delete(models.DirectReplyState).where(
+                    models.DirectReplyState.connection_id == connection.id
                 )
             )
         await self.bot.send_message(chat_id=sender.id, text="✅ Відповідь надіслано від бота.")
@@ -184,6 +228,11 @@ class SummaryActions:
             if target is None:
                 return False
             item, connection = target
+            await session.execute(
+                delete(models.DirectReplyState).where(
+                    models.DirectReplyState.connection_id == connection.id
+                )
+            )
             state = await session.get(models.SummaryReplyState, connection.id)
             if state is None:
                 state = models.SummaryReplyState(
@@ -213,6 +262,126 @@ class SummaryActions:
             query,
             note="✍️ Очікується відповідь у приватному чаті з ботом",
             toast="Форму відповіді відкрито",
+        )
+        return True
+
+    async def _show_direct_reply_contacts(self, message: Message) -> bool:
+        assert message.from_user is not None
+        async with self.database.session() as session, session.begin():
+            access = await load_access_user(session, message.from_user.id)
+            connection = await load_owner_connection(session, message.from_user.id)
+            if access is None or not access.can_process or connection is None:
+                return False
+            if not connection.rights.get("can_reply", False):
+                response_text = ui.DIRECT_REPLY_NO_PERMISSION
+                keyboard = None
+            else:
+                contacts = list(
+                    await session.scalars(
+                        select(models.ContactActivity)
+                        .where(
+                            models.ContactActivity.connection_id == connection.id,
+                            models.ContactActivity.last_incoming_at.is_not(None),
+                        )
+                        .order_by(models.ContactActivity.last_incoming_at.desc())
+                        .limit(20)
+                    )
+                )
+                response_text = (
+                    ui.DIRECT_REPLY_SELECT if contacts else ui.DIRECT_REPLY_NO_CONTACTS
+                )
+                keyboard = _direct_reply_contacts_keyboard(contacts) if contacts else None
+                await session.execute(
+                    delete(models.DirectReplyState).where(
+                        models.DirectReplyState.connection_id == connection.id
+                    )
+                )
+                await session.execute(
+                    delete(models.SummaryReplyState).where(
+                        models.SummaryReplyState.connection_id == connection.id
+                    )
+                )
+
+        await self.bot.send_message(
+            chat_id=message.chat.id,
+            text=response_text,
+            **({"reply_markup": keyboard} if keyboard is not None else {}),
+        )
+        return True
+
+    async def _request_direct_reply(
+        self, query: CallbackQuery, *, contact_id: int, now: datetime
+    ) -> bool:
+        async with self.database.session() as session, session.begin():
+            access = await load_access_user(session, query.from_user.id)
+            connection = await load_owner_connection(session, query.from_user.id)
+            if access is None or not access.can_process or connection is None:
+                return False
+            if not connection.rights.get("can_reply", False):
+                await self.bot.answer_callback_query(
+                    query.id, text=ui.DIRECT_REPLY_NO_PERMISSION, show_alert=True
+                )
+                return True
+            contact = await session.get(
+                models.ContactActivity, (connection.id, contact_id)
+            )
+            if contact is None or contact.last_incoming_at is None:
+                return False
+            await session.execute(
+                delete(models.SummaryReplyState).where(
+                    models.SummaryReplyState.connection_id == connection.id
+                )
+            )
+            state = await session.get(models.DirectReplyState, connection.id)
+            if state is None:
+                state = models.DirectReplyState(
+                    connection_id=connection.id,
+                    contact_id=contact_id,
+                    expires_at=now + REPLY_STATE_TTL,
+                )
+                session.add(state)
+            else:
+                state.contact_id = contact_id
+                state.prompt_message_id = None
+                state.expires_at = now + REPLY_STATE_TTL
+            contact_label = contact.contact_name or f"ID {contact_id}"
+
+        prompt = await self.bot.send_message(
+            chat_id=query.from_user.id,
+            text=f"✍️ Напишіть повідомлення для {contact_label}.",
+            reply_markup=ForceReply(
+                selective=True,
+                input_field_placeholder="Повідомлення буде надіслане від бота",
+            ),
+        )
+        async with self.database.session() as session, session.begin():
+            state = await session.get(models.DirectReplyState, connection.id)
+            if state is not None and state.contact_id == contact_id:
+                state.prompt_message_id = getattr(prompt, "message_id", None)
+        await finalize_callback(
+            self.bot,
+            query,
+            note=f"✍️ Обрано: {contact_label}",
+            toast="Форму повідомлення відкрито",
+        )
+        return True
+
+    async def _cancel_direct_reply(self, query: CallbackQuery) -> bool:
+        async with self.database.session() as session, session.begin():
+            access = await load_access_user(session, query.from_user.id)
+            connection = await load_owner_connection(session, query.from_user.id)
+            if access is None or not access.can_process or connection is None:
+                return False
+            await session.execute(
+                delete(models.DirectReplyState).where(
+                    models.DirectReplyState.connection_id == connection.id
+                )
+            )
+        await finalize_callback(
+            self.bot,
+            query,
+            note=ui.DIRECT_REPLY_CANCELLED,
+            toast=ui.DIRECT_REPLY_CANCELLED,
         )
         return True
 
@@ -330,6 +499,46 @@ def parse_summary_callback(data: str | None) -> tuple[str, int] | None:
         return None
     target_id = int(parts[2])
     return (parts[1], target_id) if target_id > 0 else None
+
+
+def parse_direct_reply_callback(data: str | None) -> tuple[str, int] | None:
+    parts = (data or "").split(":")
+    if (
+        len(parts) != 3
+        or parts[0] != "direct"
+        or parts[1] not in {"select", "cancel"}
+        or not parts[2].isdigit()
+    ):
+        return None
+    target_id = int(parts[2])
+    if parts[1] == "cancel":
+        return ("cancel", 0) if target_id == 0 else None
+    return ("select", target_id) if target_id > 0 else None
+
+
+def _direct_reply_contacts_keyboard(
+    contacts: list[models.ContactActivity],
+) -> InlineKeyboardMarkup:
+    rows = []
+    for contact in contacts:
+        name = (contact.contact_name or "").strip()
+        username = (contact.contact_username or "").strip()
+        if not name or name == ".":
+            name = f"@{username}" if username else f"ID {contact.contact_id}"
+        elif username:
+            name = f"{name} · @{username}"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"👤 {name}"[:60],
+                    callback_data=f"direct:select:{contact.contact_id}",
+                )
+            ]
+        )
+    rows.append(
+        [InlineKeyboardButton(text="Скасувати", callback_data="direct:cancel:0")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def _owned_item(

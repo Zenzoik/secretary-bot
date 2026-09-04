@@ -18,6 +18,7 @@ from secretary_bot.control import (
     BUTTON_OFF,
     BUTTON_ON,
     BUTTON_SCOPE_CONFIRMED,
+    BUTTON_SEND_BOT,
     BUTTON_STATUS,
     BUTTON_TODAY,
     BUTTON_USERS,
@@ -171,6 +172,7 @@ async def test_start_opens_the_button_control_panel(database: Database) -> None:
         BUTTON_TODAY,
         BUTTON_OFF,
         BUTTON_MUTE,
+        BUTTON_SEND_BOT,
     ]
     assert bot.menu_buttons[0]["chat_id"] == 42
     assert bot.menu_buttons[0]["menu_button"].web_app.url == "https://secretary.example/app/"

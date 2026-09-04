@@ -10,6 +10,7 @@ EXPECTED_TABLES = {
     "connections",
     "contact_activity",
     "contact_windows",
+    "direct_reply_states",
     "classification_directions",
     "exclusions",
     "message_log",

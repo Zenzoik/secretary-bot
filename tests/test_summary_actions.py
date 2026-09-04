@@ -11,8 +11,12 @@ from secretary_bot import models
 from secretary_bot.actions import LogAction
 from secretary_bot.sender import BusinessReplySender
 from secretary_bot.storage import ConnectionSnapshot, ensure_master, upsert_connection
-from secretary_bot.summary_actions import SummaryActions, parse_summary_callback
-from secretary_bot.texts import BOT_IDENTITY_SUFFIX
+from secretary_bot.summary_actions import (
+    SummaryActions,
+    parse_direct_reply_callback,
+    parse_summary_callback,
+)
+from secretary_bot.texts import BOT_IDENTITY_SUFFIX, BUTTON_SEND_BOT
 
 NOW = datetime(2026, 9, 2, 12, tzinfo=UTC)
 
@@ -129,6 +133,23 @@ async def seed_summary(database) -> tuple[int, int, int]:
             last_incoming_message_id=20,
         )
         session.add_all([first, second])
+        session.add_all(
+            [
+                models.ContactActivity(
+                    connection_id=connection.id,
+                    contact_id=100,
+                    contact_name="First",
+                    contact_username="first_contact",
+                    last_incoming_at=NOW - timedelta(minutes=1),
+                ),
+                models.ContactActivity(
+                    connection_id=connection.id,
+                    contact_id=200,
+                    contact_name="Second",
+                    last_incoming_at=NOW - timedelta(minutes=2),
+                ),
+            ]
+        )
         await session.flush()
         return run.id, first.id, second.id
 
@@ -186,6 +207,36 @@ async def test_reply_fsm_only_accepts_a_reply_to_its_prompt_and_sends_as_bot(dat
         )
     assert state is None
     assert replied == 1
+
+
+@pytest.mark.asyncio
+async def test_persistent_button_selects_contact_and_sends_as_bot(database) -> None:
+    await seed_summary(database)
+    bot = FakeBot()
+    handler = actions(database, bot)
+
+    assert await handler.handle_message(
+        reply_message(BUTTON_SEND_BOT, reply_to_message_id=0), now=NOW
+    )
+    chooser = bot.sent[-1]["reply_markup"]
+    assert chooser.inline_keyboard[0][0].callback_data == "direct:select:100"
+    assert "@first_contact" in chooser.inline_keyboard[0][0].text
+
+    assert await handler.handle_callback(callback("direct:select:100"), now=NOW)
+    prompt_id = 102
+    assert await handler.handle_message(
+        reply_message("Надішлю документи сьогодні", reply_to_message_id=prompt_id),
+        now=NOW,
+    )
+
+    business_send = next(message for message in bot.sent if "business_connection_id" in message)
+    assert business_send["chat_id"] == 100
+    assert business_send["text"] == (
+        f"Надішлю документи сьогодні\n\n{BOT_IDENTITY_SUFFIX}"
+    )
+    async with database.session() as session:
+        state = await session.get(models.DirectReplyState, 1)
+    assert state is None
 
 
 @pytest.mark.asyncio
@@ -261,3 +312,19 @@ async def test_summary_action_from_another_user_is_rejected(database) -> None:
 )
 def test_summary_callback_parser(data: str, expected: tuple[str, int] | None) -> None:
     assert parse_summary_callback(data) == expected
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        ("direct:select:100", ("select", 100)),
+        ("direct:cancel:0", ("cancel", 0)),
+        ("direct:select:0", None),
+        ("direct:cancel:1", None),
+        ("summary:reply:1", None),
+    ],
+)
+def test_direct_reply_callback_parser(
+    data: str, expected: tuple[str, int] | None
+) -> None:
+    assert parse_direct_reply_callback(data) == expected

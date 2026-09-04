@@ -435,6 +435,18 @@ class SummaryReplyState(Base):
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
 
 
+class DirectReplyState(Base):
+    __tablename__ = "direct_reply_states"
+
+    connection_id: Mapped[int] = mapped_column(
+        ForeignKey("connections.id", ondelete="CASCADE"), primary_key=True
+    )
+    contact_id: Mapped[int] = mapped_column(BigInteger)
+    prompt_message_id: Mapped[int | None] = mapped_column(BigInteger)
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime(), index=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
+
+
 class SummaryChannelRequest(Base):
     __tablename__ = "summary_channel_requests"
     __table_args__ = (

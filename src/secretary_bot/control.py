@@ -58,6 +58,7 @@ BUTTON_ON = ui.BUTTON_ON
 BUTTON_MUTE = ui.BUTTON_MUTE
 BUTTON_LIVE = ui.BUTTON_LIVE
 BUTTON_LIVE_ACTIVE = ui.BUTTON_LIVE_ACTIVE
+BUTTON_SEND_BOT = ui.BUTTON_SEND_BOT
 BUTTON_BACK = ui.BUTTON_BACK
 BUTTON_LIVE_CONFIRM = ui.BUTTON_LIVE_CONFIRM
 BUTTON_CANCEL = ui.BUTTON_CANCEL
@@ -919,6 +920,7 @@ def _main_keyboard(
     rows = [
         [KeyboardButton(text=BUTTON_STATUS), KeyboardButton(text=BUTTON_TODAY)],
         [KeyboardButton(text=power_button), KeyboardButton(text=BUTTON_MUTE)],
+        [KeyboardButton(text=BUTTON_SEND_BOT)],
     ]
     return ReplyKeyboardMarkup(
         keyboard=rows,
