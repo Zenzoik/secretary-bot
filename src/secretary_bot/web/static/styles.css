@@ -19,8 +19,8 @@
 }
 
 * { box-sizing: border-box; }
-html { background: var(--bg); scroll-behavior: smooth; }
-body { margin: 0; min-width: 320px; color: var(--text); background: var(--bg); }
+html { max-width: 100%; background: var(--bg); scroll-behavior: smooth; }
+body { margin: 0; min-width: 0; max-width: 100%; overflow-x: hidden; color: var(--text); background: var(--bg); }
 button, input, select, textarea { font: inherit; }
 button { color: inherit; }
 button, label, input, select, textarea { -webkit-tap-highlight-color: transparent; }
@@ -96,8 +96,9 @@ input[type="checkbox"], input[type="radio"] { width: auto; }
 .segmented span { display: block; padding: 10px 16px; border-radius: 9px; color: var(--muted); text-align: center; }
 .segmented input:checked + span { color: var(--text); background: var(--surface-3); box-shadow: inset 0 0 0 1px var(--border); }
 .switch-row { max-width: 620px; margin-top: 22px; padding: 15px 0; display: flex; align-items: center; justify-content: space-between; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.switch-row > span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .switch-row strong, .switch-row small { display: block; }
-.switch-row input, .tiny-switch input { appearance: none; width: 38px; height: 22px; border-radius: 999px; padding: 0; background: #273548; cursor: pointer; position: relative; }
+.switch-row input, .tiny-switch input { appearance: none; flex: 0 0 38px; width: 38px; height: 22px; border-radius: 999px; padding: 0; background: #273548; cursor: pointer; position: relative; }
 .switch-row input::after, .tiny-switch input::after { content: ""; position: absolute; width: 16px; height: 16px; top: 2px; left: 2px; border-radius: 50%; background: #aab4c2; transition: 150ms ease; }
 .switch-row input:checked, .tiny-switch input:checked { background: var(--accent); }
 .switch-row input:checked::after, .tiny-switch input:checked::after { transform: translateX(16px); background: #171c23; }
@@ -115,7 +116,7 @@ input[type="checkbox"], input[type="radio"] { width: auto; }
 .window-list { display: grid; gap: 10px; }
 .window-row { display: grid; grid-template-columns: 1.35fr 1fr 1fr auto auto; gap: 10px; align-items: end; padding: 14px; border: 1px solid var(--border); border-radius: 13px; background: #111b28; }
 .tiny-switch { display: flex; align-items: center; gap: 7px; min-height: 39px; }
-.tiny-switch input { width: 34px; height: 20px; }
+.tiny-switch input { flex-basis: 34px; width: 34px; height: 20px; }
 .tiny-switch input::after { width: 14px; height: 14px; }
 .tiny-switch input:checked::after { transform: translateX(14px); }
 
@@ -170,9 +171,9 @@ tbody tr:last-child td { border-bottom: 0; }
   .sidebar { position: sticky; z-index: 10; height: auto; padding: max(12px, env(safe-area-inset-top)) 14px 10px; border-right: 0; border-bottom: 1px solid var(--border); }
   .brand { padding: 0 4px 10px; }
   .brand-mark { width: 34px; border-radius: 11px; }
-  .navigation { display: flex; gap: 5px; overflow-x: auto; scrollbar-width: none; }
+  .navigation { display: flex; gap: 5px; overflow-x: auto; overscroll-behavior-inline: contain; scroll-snap-type: x proximity; scrollbar-width: none; }
   .navigation::-webkit-scrollbar { display: none; }
-  .navigation button { flex: 0 0 auto; width: auto; padding: 9px 11px; }
+  .navigation button { flex: 0 0 auto; width: auto; min-height: 42px; padding: 9px 11px; scroll-snap-align: start; }
   .navigation button span { display: none; }
   .sidebar-footer { display: none; }
   .mobile-web-action { display: flex; }
@@ -185,11 +186,19 @@ tbody tr:last-child td { border-bottom: 0; }
 }
 
 @media (max-width: 620px) {
+  .sidebar { padding: max(8px, env(safe-area-inset-top)) 10px 8px; }
+  .brand { display: none; }
+  .navigation { margin-inline: -10px; padding-inline: 10px; scroll-padding-inline: 10px; }
+  .workspace { width: 100%; padding: 16px 10px calc(28px + env(safe-area-inset-bottom)); }
+  .topbar { gap: 10px; margin-bottom: 16px; }
+  .topbar > div:first-child { min-width: 0; }
   .topbar h1 { font-size: 28px; }
-  .connection-pill { padding: 7px 9px; }
-  .panel { padding: 18px 15px; border-radius: 15px; }
-  .panel-heading { display: grid; margin-bottom: 20px; }
+  .connection-pill { flex: 0 0 auto; padding: 7px 9px; }
+  .view, .panel, form, label, input, select, textarea { min-width: 0; max-width: 100%; }
+  .panel { width: 100%; padding: 16px 14px; border-radius: 15px; }
+  .panel-heading { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-bottom: 20px; }
   .panel-heading .search { width: 100%; }
+  .panel-heading .badge { justify-self: start; }
   .form-grid.two, .form-grid.three, .segmented, .direction-card, .filter-bar, .delay-ranges { grid-template-columns: 1fr; }
   .window-row { grid-template-columns: 1fr 1fr; }
   .window-row label:first-child { grid-column: 1 / -1; }
@@ -198,8 +207,18 @@ tbody tr:last-child td { border-bottom: 0; }
   .direction-card .keywords, .direction-card .switch-row { grid-column: auto; }
   fieldset { grid-template-columns: 1fr; }
   fieldset input[type="datetime-local"] { grid-column: auto; }
+  .switch-row { width: 100%; gap: 12px; }
+  .switch-row input { flex-basis: 38px; margin: 0; }
+  .retention-switch { align-items: flex-start; }
+  .retention-switch input { margin-top: 2px; }
   .form-actions .primary { width: 100%; }
   .toast { right: 14px; bottom: calc(14px + env(safe-area-inset-bottom)); max-width: calc(100vw - 28px); }
+}
+
+@media (max-width: 360px) {
+  .workspace { padding-inline: 8px; }
+  .panel { padding-inline: 12px; }
+  .topbar h1 { font-size: 25px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
