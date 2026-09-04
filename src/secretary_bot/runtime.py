@@ -25,6 +25,7 @@ from secretary_bot.storage import (
     upsert_connection,
 )
 from secretary_bot.summary_actions import SummaryActions
+from secretary_bot.summary_channel import SummaryChannelConnector
 from secretary_bot.texts import (
     CONNECTION_DISABLED_ALERT,
     FEEDBACK_RESULTS,
@@ -57,6 +58,7 @@ class RuntimeState:
     pipeline: Pipeline
     control: ControlPlane
     summary_actions: SummaryActions
+    summary_channel_connector: SummaryChannelConnector
     queue_size: int
     # Optional safety net for early operation: when set, only these chats are
     # processed. Empty means the FR-2 policy — every chat except exclusions.
@@ -103,6 +105,8 @@ async def handle_update(update: Update, state: RuntimeState) -> None:
 
     if update.message is not None:
         if await state.summary_actions.handle_message(update.message):
+            return
+        if await state.summary_channel_connector.handle_message(update.message):
             return
         if not await state.control.handle_message(update.message):
             _log(logging.INFO, "message_ignored", update_id=update.update_id)

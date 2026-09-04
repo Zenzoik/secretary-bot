@@ -141,6 +141,19 @@ fieldset input[type="datetime-local"] { grid-column: 1 / -1; }
 .neutral { color: var(--warning); }
 .retention-switch { max-width: none; }
 .retention-stats { min-height: 18px; margin: 10px 0 22px; color: var(--muted); font-size: 12px; }
+.channel-connect { display: grid; gap: 14px; margin-top: 22px; padding: 18px; border: 1px solid var(--border); border-radius: 14px; background: #111b28; }
+.channel-connect-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.channel-connect-heading strong, .channel-connect-heading small { display: block; }
+.channel-connect-heading strong { font-size: 14px; }
+.channel-connect-heading small { margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.channel-connect-heading .text-button { flex: 0 0 auto; color: var(--danger); }
+.channel-picker { width: 100%; min-height: 44px; }
+.channel-fallback { border-top: 1px solid var(--border); padding-top: 13px; }
+.channel-fallback summary { color: var(--muted); font-size: 12px; cursor: pointer; }
+.channel-fallback[open] summary { color: var(--text); }
+.channel-fallback .muted { margin: 12px 0; }
+.inline-field { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
+.inline-field .secondary { min-height: 42px; }
 .filter-bar { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; margin-bottom: 20px; }
 .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; }
 table { width: 100%; border-collapse: collapse; min-width: 720px; }
@@ -206,6 +219,10 @@ tbody tr:last-child td { border-bottom: 0; }
   .switch-row input { flex-basis: 38px; margin: 0; }
   .retention-switch { align-items: flex-start; }
   .retention-switch input { margin-top: 2px; }
+  .channel-connect { padding: 14px; }
+  .channel-connect-heading { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .channel-connect-heading .text-button { justify-self: start; padding-left: 0; }
+  .inline-field { grid-template-columns: 1fr; }
   .form-actions .primary { width: 100%; }
   .toast { right: 14px; bottom: calc(14px + env(safe-area-inset-bottom)); max-width: calc(100vw - 28px); }
 }

@@ -19,6 +19,7 @@ EXPECTED_TABLES = {
     "schedules",
     "shadow_feedback",
     "summary_items",
+    "summary_channel_requests",
     "summary_reply_states",
     "summary_runs",
     "templates",
@@ -96,6 +97,7 @@ def test_critical_domain_checks_are_present() -> None:
             "ck_message_log_direction_values",
         },
         "shadow_feedback": {"ck_shadow_feedback_verdict_values"},
+        "summary_channel_requests": {"ck_summary_channel_requests_status_values"},
         "web_sessions": {"ck_web_sessions_kind_values"},
     }
 

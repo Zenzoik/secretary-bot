@@ -114,6 +114,7 @@ class Connection(Base):
     timezone: Mapped[str] = mapped_column(Text, server_default=sql_text("'Europe/Kyiv'"))
     summary_time: Mapped[time] = mapped_column(Time, server_default=sql_text("'09:00:00'"))
     summary_channel_id: Mapped[int | None] = mapped_column(BigInteger)
+    summary_channel_title: Mapped[str | None] = mapped_column(Text)
     message_retention_enabled: Mapped[bool] = mapped_column(
         Boolean, server_default=sql_text("false")
     )
@@ -429,6 +430,29 @@ class SummaryReplyState(Base):
     )
     prompt_message_id: Mapped[int | None] = mapped_column(BigInteger)
     expires_at: Mapped[datetime] = mapped_column(UtcDateTime(), index=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
+
+
+class SummaryChannelRequest(Base):
+    __tablename__ = "summary_channel_requests"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'connected', 'error')",
+            name="status_values",
+        ),
+        Index("ix_summary_channel_requests_owner_pending", "owner_user_id", "expires_at"),
+    )
+
+    id: Mapped[int] = mapped_column(SURROGATE_KEY, primary_key=True, autoincrement=True)
+    connection_id: Mapped[int] = mapped_column(
+        ForeignKey("connections.id", ondelete="CASCADE"), index=True
+    )
+    owner_user_id: Mapped[int] = mapped_column(BigInteger)
+    status: Mapped[str] = mapped_column(Text, server_default=sql_text("'pending'"))
+    channel_id: Mapped[int | None] = mapped_column(BigInteger)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime())
+    consumed_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
 
 

@@ -9,9 +9,9 @@
     <meta property="og:description" content="Налаштування без зайвих кроків">
     <meta property="og:image" content="{{BASE_URL}}/assets/og.png">
     <title>Personal Secretary — налаштування</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260904-2">
+    <link rel="stylesheet" href="/assets/styles.css?v=20260904-3">
     <script src="https://telegram.org/js/telegram-web-app.js?59"></script>
-    <script src="/assets/app.js?v=20260904-2" defer></script>
+    <script src="/assets/app.js?v=20260904-3" defer></script>
   </head>
   <body>
     <div class="app-shell" id="app" aria-busy="true">
@@ -165,7 +165,25 @@
               <label class="switch-row retention-switch"><span><strong>Зберігати тексти для самарі</strong><small>Вимкнення одразу видалить усі збережені тексти. Відповіді бота продовжать працювати.</small></span><input name="message_retention_enabled" type="checkbox" role="switch" aria-describedby="retention-stats"></label>
               <p class="retention-stats" id="retention-stats" aria-live="polite"></p>
               <label>Локальний час<input name="summary_time" type="time" required></label>
-              <label>Telegram channel ID<input name="summary_channel_id" type="number" placeholder="-1001234567890"><small>Числовий ID приватного каналу, де бот є адміністратором.</small></label>
+              <input name="summary_channel_id" type="hidden">
+              <section class="channel-connect" aria-labelledby="summary-channel-heading">
+                <div class="channel-connect-heading">
+                  <div>
+                    <strong id="summary-channel-heading">Канал доставки</strong>
+                    <small id="summary-channel-state" aria-live="polite">Канал не підключено — самарі надходитиме в особистий чат.</small>
+                  </div>
+                  <button class="text-button hidden" id="disconnect-summary-channel" type="button">Відключити</button>
+                </div>
+                <button class="secondary channel-picker" id="choose-summary-channel" type="button">Обрати або створити канал у Telegram</button>
+                <details class="channel-fallback" id="summary-channel-fallback">
+                  <summary>Підключити за посиланням</summary>
+                  <p class="muted">Для закритого каналу скопіюйте посилання на будь-який його допис. Бот має бути адміністратором із правом публікації.</p>
+                  <div class="inline-field">
+                    <label>Посилання на допис або @username<input id="summary-channel-reference" type="text" inputmode="url" maxlength="500" placeholder="https://t.me/c/1234567890/5"></label>
+                    <button class="secondary" id="connect-summary-channel-link" type="button">Перевірити й підключити</button>
+                  </div>
+                </details>
+              </section>
               <div class="form-actions"><button class="primary" type="submit">Зберегти самарі</button></div>
             </form>
           </section>

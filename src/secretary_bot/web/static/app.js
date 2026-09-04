@@ -198,6 +198,46 @@
     $("#retention-stats").textContent = data.message_retention_enabled
       ? `Збережено повідомлень: ${data.retained_message_count} · зашифрований обсяг: ${size}${data.next_deletion_at ? ` · найближче видалення ${formatDate(data.next_deletion_at)}` : ""}`
       : "Тексти повідомлень не зберігаються.";
+    const connected = Boolean(data.summary_channel_id);
+    const channelName = data.summary_channel_title || (connected ? "Підключений Telegram-канал" : "");
+    $("#summary-channel-state").textContent = connected
+      ? `${channelName} · щоденне самарі надходитиме в канал.`
+      : "Канал не підключено — самарі надходитиме в особистий чат.";
+    $("#disconnect-summary-channel").classList.toggle("hidden", !connected);
+    $("#choose-summary-channel").classList.toggle("hidden", !tg?.requestChat);
+    if (!tg?.requestChat) $("#summary-channel-fallback").open = true;
+  }
+
+  const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+  async function pollChannelRequest(requestId) {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      await wait(600 + attempt * 120);
+      const result = await api(`/api/v1/summary/channel-request/${requestId}`);
+      if (result.status === "connected") {
+        state.bootstrap.summary = result.summary;
+        fillSummary();
+        toast("Канал підключено");
+        tg?.HapticFeedback?.notificationOccurred?.("success");
+        return;
+      }
+      if (result.status === "error") throw new Error(result.error || "Не вдалося підключити канал");
+    }
+    throw new Error("Telegram ще обробляє вибір. Оновіть панель за кілька секунд.");
+  }
+
+  async function withBusyButton(button, label, callback) {
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = label;
+    try { await callback(); }
+    catch (error) {
+      toast(error.message, true);
+      tg?.HapticFeedback?.notificationOccurred?.("error");
+    } finally {
+      button.disabled = false;
+      button.textContent = original;
+    }
   }
 
   async function loadContacts() {
@@ -306,6 +346,34 @@
       }
       fillSummary();
     }); });
+    $("#choose-summary-channel").addEventListener("click", (event) => withBusyButton(event.currentTarget, "Відкриваємо Telegram…", async () => {
+      if (!tg?.requestChat) throw new Error("Відкрийте Mini App у Telegram або скористайтеся посиланням нижче");
+      const request = await api("/api/v1/summary/channel-request", { method: "POST" });
+      const sent = await new Promise((resolve) => tg.requestChat(request.prepared_id, resolve));
+      if (!sent) {
+        toast("Вибір каналу скасовано");
+        return;
+      }
+      toast("Перевіряємо доступ до каналу…");
+      await pollChannelRequest(request.request_id);
+    }));
+    $("#connect-summary-channel-link").addEventListener("click", (event) => withBusyButton(event.currentTarget, "Перевіряємо…", async () => {
+      const input = $("#summary-channel-reference");
+      const reference = input.value.trim();
+      if (!reference) throw new Error("Вставте посилання на допис або @username каналу");
+      state.bootstrap.summary = await api("/api/v1/summary/channel", { method: "POST", body: JSON.stringify({ reference }) });
+      input.value = "";
+      fillSummary();
+      toast("Канал перевірено й підключено");
+      tg?.HapticFeedback?.notificationOccurred?.("success");
+    }));
+    $("#disconnect-summary-channel").addEventListener("click", (event) => withBusyButton(event.currentTarget, "Відключаємо…", async () => {
+      const accepted = window.confirm("Відключити канал? Наступні самарі надходитимуть в особистий чат із ботом.");
+      if (!accepted) return;
+      state.bootstrap.summary = await api("/api/v1/summary/channel", { method: "DELETE" });
+      fillSummary();
+      toast("Канал відключено");
+    }));
     $("#log-filter").elements.action.innerHTML += actions.map((action) => `<option value="${action}">${escapeHtml(actionLabels[action] || action)}</option>`).join("");
     $("#log-filter").addEventListener("submit", (event) => { event.preventDefault(); loadLogs(); });
     $$(".browser-link-action").forEach((button) => button.addEventListener("click", async () => { try { const result = await api("/api/v1/auth/browser-link", { method: "POST" }); await copyText(result.url); toast("Одноразове посилання скопійовано"); } catch (error) { toast(error.message, true); } }));

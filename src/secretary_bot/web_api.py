@@ -22,6 +22,7 @@ from secretary_bot.classifier import (
 )
 from secretary_bot.config import Settings
 from secretary_bot.storage import Database, purge_retained_messages, set_delivery_preferences
+from secretary_bot.summary_channel import SummaryChannelConnector, SummaryChannelError
 from secretary_bot.templates import DEFAULT_TEMPLATES, TemplateCode
 from secretary_bot.web_auth import (
     EXCHANGE_TTL,
@@ -154,6 +155,10 @@ class SummaryPayload(BaseModel):
         return value
 
 
+class SummaryChannelPayload(BaseModel):
+    reference: Annotated[str, Field(min_length=1, max_length=500)]
+
+
 class ContactPayload(BaseModel):
     exclusion: Literal["none", "forever", "until"] = "none"
     exclusion_until: datetime | None = None
@@ -215,7 +220,12 @@ class WebApi:
         return Principal(user=user, connection=connection)
 
 
-def build_web_router(*, database: Database, settings: Settings) -> APIRouter:
+def build_web_router(
+    *,
+    database: Database,
+    settings: Settings,
+    summary_channel_connector: SummaryChannelConnector | None = None,
+) -> APIRouter:
     router = APIRouter()
     api = WebApi(database=database, settings=settings)
 
@@ -376,15 +386,104 @@ def build_web_router(*, database: Database, settings: Settings) -> APIRouter:
                     detail="На сервері не налаштовано ключ шифрування",
                 )
             principal.connection.summary_time = payload.summary_time
-            principal.connection.summary_channel_id = payload.summary_channel_id
+            if summary_channel_connector is None:
+                principal.connection.summary_channel_id = payload.summary_channel_id
+                if payload.summary_channel_id is None:
+                    principal.connection.summary_channel_title = None
+            elif (
+                payload.summary_channel_id is not None
+                and payload.summary_channel_id != principal.connection.summary_channel_id
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Підключіть канал через безпечний вибір у панелі",
+                )
+            elif payload.summary_channel_id is None:
+                principal.connection.summary_channel_id = None
+                principal.connection.summary_channel_title = None
             if payload.message_retention_enabled is not None:
                 if not payload.message_retention_enabled:
-                    await purge_retained_messages(
-                        session, connection_id=principal.connection.id
-                    )
-                principal.connection.message_retention_enabled = (
-                    payload.message_retention_enabled
+                    await purge_retained_messages(session, connection_id=principal.connection.id)
+                principal.connection.message_retention_enabled = payload.message_retention_enabled
+            await session.flush()
+            return await _summary(session, principal.connection)
+
+    @router.post("/api/v1/summary/channel-request")
+    async def request_summary_channel(request: Request) -> dict[str, str]:
+        if summary_channel_connector is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Вибір каналу тимчасово недоступний",
+            )
+        async with database.session() as session, session.begin():
+            principal = await api.authorize(session, request)
+            try:
+                prepared = await summary_channel_connector.prepare_request(
+                    session,
+                    connection=principal.connection,
+                    owner_user_id=principal.user.user_id,
                 )
+            except SummaryChannelError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            return {
+                "request_id": str(prepared.request_id),
+                "prepared_id": prepared.prepared_id,
+                "expires_in": "15m",
+            }
+
+    @router.get("/api/v1/summary/channel-request/{request_id}")
+    async def summary_channel_request_status(request: Request, request_id: int) -> dict[str, Any]:
+        async with database.session() as session, session.begin():
+            principal = await api.authorize(session, request)
+            row = await session.scalar(
+                select(models.SummaryChannelRequest).where(
+                    models.SummaryChannelRequest.id == request_id,
+                    models.SummaryChannelRequest.connection_id == principal.connection.id,
+                    models.SummaryChannelRequest.owner_user_id == principal.user.user_id,
+                )
+            )
+            if row is None:
+                raise HTTPException(status_code=404, detail="Запит не знайдено")
+            request_status = row.status
+            if request_status == "pending" and row.expires_at <= datetime.now(UTC):
+                request_status = "error"
+                row.status = "error"
+                row.error_message = "Час вибору каналу минув. Спробуйте ще раз."
+                row.consumed_at = datetime.now(UTC)
+            return {
+                "status": request_status,
+                "error": row.error_message,
+                "summary": await _summary(session, principal.connection),
+            }
+
+    @router.post("/api/v1/summary/channel")
+    async def connect_summary_channel(
+        request: Request, payload: SummaryChannelPayload
+    ) -> dict[str, Any]:
+        if summary_channel_connector is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Підключення каналу тимчасово недоступне",
+            )
+        async with database.session() as session, session.begin():
+            principal = await api.authorize(session, request)
+            try:
+                await summary_channel_connector.connect_reference(
+                    session,
+                    connection=principal.connection,
+                    owner_user_id=principal.user.user_id,
+                    reference=payload.reference,
+                )
+            except SummaryChannelError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return await _summary(session, principal.connection)
+
+    @router.delete("/api/v1/summary/channel")
+    async def disconnect_summary_channel(request: Request) -> dict[str, Any]:
+        async with database.session() as session, session.begin():
+            principal = await api.authorize(session, request)
+            principal.connection.summary_channel_id = None
+            principal.connection.summary_channel_title = None
             await session.flush()
             return await _summary(session, principal.connection)
 
@@ -560,6 +659,7 @@ async def _summary(session: AsyncSession, connection: models.Connection) -> dict
     return {
         "summary_time": connection.summary_time.isoformat(timespec="minutes"),
         "summary_channel_id": connection.summary_channel_id,
+        "summary_channel_title": connection.summary_channel_title,
         "message_retention_enabled": connection.message_retention_enabled,
         "retention_hours": 48,
         "retained_message_count": retained[0],

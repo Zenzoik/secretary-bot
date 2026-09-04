@@ -35,6 +35,7 @@ from secretary_bot.runtime import RuntimeState, TelegramBot, process_updates
 from secretary_bot.sender import BusinessReplySender
 from secretary_bot.storage import Database, ensure_master
 from secretary_bot.summary_actions import SummaryActions
+from secretary_bot.summary_channel import SummaryChannelConnector
 from secretary_bot.web_api import build_web_router
 from secretary_bot.workers import (
     run_daily_summary,
@@ -91,10 +92,12 @@ def create_app(
         bot=telegram_bot,
         cipher=message_cipher,
         model=language_model,
-        classifier_defaults=ClassifierSettings(
-            timeout_seconds=settings.classifier_timeout_seconds
-        ),
+        classifier_defaults=ClassifierSettings(timeout_seconds=settings.classifier_timeout_seconds),
         summary_timeout_seconds=settings.summary_timeout_seconds,
+    )
+    summary_channel_connector = SummaryChannelConnector(
+        database=connection_database,
+        bot=telegram_bot,
     )
     state = RuntimeState(
         bot=telegram_bot,
@@ -112,6 +115,7 @@ def create_app(
             sender=reply_sender,
             cipher=message_cipher,
         ),
+        summary_channel_connector=summary_channel_connector,
         queue_size=settings.update_queue_size,
         allowed_chat_ids=settings.allowed_chat_ids,
     )
@@ -158,7 +162,13 @@ def create_app(
     app.state.runtime = state
     app.state.ingestor = ingestor
     app.state.pipeline = pipeline
-    app.include_router(build_web_router(database=connection_database, settings=settings))
+    app.include_router(
+        build_web_router(
+            database=connection_database,
+            settings=settings,
+            summary_channel_connector=summary_channel_connector,
+        )
+    )
     app.mount("/assets", StaticFiles(directory=WEB_ROOT), name="web-assets")
 
     @app.get("/app", include_in_schema=False)
