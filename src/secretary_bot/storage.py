@@ -437,6 +437,8 @@ async def set_connection_control(
     row = await session.get(models.Connection, connection_id)
     if row is None:
         raise LookupError("connection not found")
+    # Scheduled replies stay in the outbox: the worker refuses them at their due
+    # time with a logged ``skipped_kill_switch`` instead of dropping them silently.
     row.kill_switch = kill_switch
     row.muted_until = muted_until
     await session.flush()
@@ -453,6 +455,15 @@ async def deactivate_connection(session: AsyncSession, connection_id: int) -> No
     row.live_confirmation_until = None
     row.control_state = "main"
     await session.flush()
+
+    await session.execute(
+        update(models.ReplyJob)
+        .where(
+            models.ReplyJob.connection_id == connection_id,
+            models.ReplyJob.completed_at.is_(None),
+        )
+        .values(completed_at=datetime.now(UTC))
+    )
 
 
 async def set_delivery_preferences(

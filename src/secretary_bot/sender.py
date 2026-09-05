@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
 
-from aiogram.exceptions import TelegramAPIError, TelegramRetryAfter
+from aiogram.exceptions import (
+    TelegramAPIError,
+    TelegramNetworkError,
+    TelegramRetryAfter,
+    TelegramServerError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +37,7 @@ class SendResult:
     message_id: int | None = None
     error_code: str | None = None
     attempts: int = 1
+    replayed: bool = False
 
     @property
     def is_sent(self) -> bool:
@@ -55,7 +61,7 @@ class BusinessReplySender:
     async def send(
         self,
         *,
-        business_connection_id: str,
+        business_connection_id: str | None,
         chat_id: int,
         text: str,
         reply_markup: Any | None = None,
@@ -67,6 +73,8 @@ class BusinessReplySender:
                     chat_id=chat_id,
                     text=text,
                 )
+                if business_connection_id is None:
+                    kwargs.pop("business_connection_id")
                 if reply_markup is not None:
                     kwargs["reply_markup"] = reply_markup
                 sent = await self.bot.send_message(**kwargs)
@@ -75,6 +83,10 @@ class BusinessReplySender:
                 if attempt == self.max_attempts:
                     return SendResult(SendOutcome.FAILED, error_code="FLOOD_WAIT", attempts=attempt)
                 await self.sleep(exc.retry_after + FLOOD_WAIT_MARGIN_SECONDS)
+            except (TelegramNetworkError, TelegramServerError, TimeoutError):
+                return SendResult(
+                    SendOutcome.FAILED, error_code="DELIVERY_UNCERTAIN", attempts=attempt
+                )
             except TelegramAPIError as exc:
                 error_code = _error_code(exc)
                 if error_code == CHAT_INACTIVE:
@@ -98,7 +110,7 @@ class BusinessReplySender:
         raise AssertionError("unreachable: every attempt either returns or retries")
 
     async def mark_read(
-        self, *, business_connection_id: str, chat_id: int, message_id: int
+        self, *, business_connection_id: str | None, chat_id: int, message_id: int
     ) -> bool:
         """Mark the triggering message read only when the connection allows it."""
         try:

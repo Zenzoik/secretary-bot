@@ -125,13 +125,15 @@ async def test_flood_wait_gives_up_after_three_attempts() -> None:
 
 
 @pytest.mark.asyncio
-async def test_transient_failures_are_retried_with_backoff() -> None:
+async def test_ambiguous_network_failure_is_not_blindly_retried() -> None:
     bot = FakeBot(TelegramNetworkError(method=METHOD, message="timeout"))
 
     result, slept = await send(bot)
 
-    assert result.outcome is SendOutcome.SENT
-    assert slept == [2.0]
+    assert result.outcome is SendOutcome.FAILED
+    assert result.error_code == "DELIVERY_UNCERTAIN"
+    assert result.attempts == 1
+    assert slept == []
 
 
 @pytest.mark.asyncio
@@ -141,8 +143,9 @@ async def test_persistent_failure_is_reported_not_raised() -> None:
     result, slept = await send(bot)
 
     assert result.outcome is SendOutcome.FAILED
-    assert result.error_code == "TelegramNetworkError"
-    assert slept == [2.0, 4.0]
+    assert result.error_code == "DELIVERY_UNCERTAIN"
+    assert result.attempts == 1
+    assert slept == []
 
 
 @pytest.mark.asyncio

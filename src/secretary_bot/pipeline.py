@@ -3,17 +3,20 @@ from __future__ import annotations
 import json
 import logging
 import random
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from secretary_bot import models
 from secretary_bot.actions import LogAction
 from secretary_bot.classifier import Category, ClassifierSettings, LanguageModel, classify
 from secretary_bot.delayed import MAX_DELAY_SECONDS, DelayedReplyQueue, ReplyTask, reply_delay
+from secretary_bot.delivery import send_once
 from secretary_bot.escalation import escalation_offer_keyboard
 from secretary_bot.gate import GateDecision, evaluate_gate
 from secretary_bot.hard_filter import HardFilterResult
@@ -44,6 +47,11 @@ from secretary_bot.templates import TemplateCode, render, template_for
 from secretary_bot.texts import CONNECTION_LOST_ALERT, as_bot_reply
 
 logger = logging.getLogger(__name__)
+
+# A reply restored after an outage must not arrive hours after the message:
+# the widest configurable delay is one hour, plus a margin for retries.
+MAX_REPLY_AGE = timedelta(hours=2)
+STALE_REPLY = "STALE_REPLY"
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +86,18 @@ class Pipeline:
 
     async def process_incoming(self, incoming: IncomingMessage) -> None:
         """Steps 1–4 of §4: filter, gate, classify, then wait out the delay."""
+        job_key = (
+            f"reply:{incoming.business_connection_id}:{incoming.contact_id}:{incoming.message_id}"
+        )
         async with self.database.session() as session, session.begin():
+            existing_job = await session.get(models.ReplyJob, job_key)
+            if existing_job is not None:
+                if existing_job.completed_at is None:
+                    await self.queue.schedule(
+                        ReplyTask.from_json(json.dumps(existing_job.payload)),
+                        due_at=existing_job.due_at,
+                    )
+                return
             connection = await load_connection(session, incoming.business_connection_id)
             if connection is None:
                 _log(logging.WARNING, "unknown_connection", chat_id=incoming.chat_id)
@@ -144,13 +163,29 @@ class Pipeline:
                 await self._log(session, connection, incoming, LogAction(gate.decision.value))
                 return
 
-            await claim_window(
-                session, connection.id, incoming.contact_id, window_key=gate.window_key
-            )
             settings = await load_classifier_settings(
                 session, connection.id, defaults=self.classifier_defaults
             )
-            classification = await classify(incoming.text, model=self.model, settings=settings)
+        # Slow model I/O must not hold a database transaction or a pooled connection.
+        classification = await classify(incoming.text, model=self.model, settings=settings)
+        async with self.database.session() as session, session.begin():
+            await session.scalar(
+                select(models.Connection)
+                .where(models.Connection.id == connection.id)
+                .with_for_update()
+            )
+            if await session.get(models.ReplyJob, job_key) is not None:
+                return
+            connection = await load_connection(session, incoming.business_connection_id)
+            assert connection is not None
+            contact = await load_contact_state(session, connection.id, incoming.contact_id)
+            gate = evaluate_gate(connection.policy, contact, now=incoming.received_at)
+            if not gate.is_allowed:
+                await self._log(session, connection, incoming, LogAction(gate.decision.value))
+                return
+            await claim_window(
+                session, connection.id, incoming.contact_id, window_key=gate.window_key
+            )
             forced_template = await load_forced_template_code(
                 session, connection.id, incoming.contact_id
             )
@@ -164,37 +199,45 @@ class Pipeline:
                 occurred_at=incoming.received_at,
             )
 
-        task = ReplyTask(
-            connection_id=connection.id,
-            business_connection_id=connection.business_connection_id,
-            contact_id=incoming.contact_id,
-            chat_id=incoming.chat_id,
-            message_id=incoming.message_id,
-            template_code=forced_template or template_for(classification.category).value,
-            category=classification.category.value,
-            incoming_at=incoming.received_at.isoformat(),
-            sender_identity=connection.sender_identity,
-            confidence=None
-            if classification.confidence is None
-            else str(classification.confidence),
-            window_key=gate.window_key,
-            contact_name=incoming.contact_name,
-            contact_username=incoming.contact_username,
-            request_id=request_id,
-        )
-        if connection.sender_identity == "bot":
-            delay = reply_delay(
-                min_seconds=connection.bot_delay_seconds,
-                max_seconds=min(connection.delay_max_seconds, MAX_DELAY_SECONDS),
-                rng=self.rng,
+            task = ReplyTask(
+                connection_id=connection.id,
+                business_connection_id=connection.business_connection_id,
+                contact_id=incoming.contact_id,
+                chat_id=incoming.chat_id,
+                message_id=incoming.message_id,
+                template_code=forced_template or template_for(classification.category).value,
+                category=classification.category.value,
+                incoming_at=incoming.received_at.isoformat(),
+                sender_identity=connection.sender_identity,
+                confidence=None
+                if classification.confidence is None
+                else str(classification.confidence),
+                window_key=gate.window_key,
+                contact_name=incoming.contact_name,
+                contact_username=incoming.contact_username,
+                request_id=request_id,
             )
-        else:
-            delay = reply_delay(
-                min_seconds=connection.delay_min_seconds,
-                max_seconds=connection.delay_max_seconds,
-                rng=self.rng,
+            if connection.sender_identity == "bot":
+                delay = reply_delay(
+                    min_seconds=connection.bot_delay_seconds,
+                    max_seconds=min(connection.delay_max_seconds, MAX_DELAY_SECONDS),
+                    rng=self.rng,
+                )
+            else:
+                delay = reply_delay(
+                    min_seconds=connection.delay_min_seconds,
+                    max_seconds=connection.delay_max_seconds,
+                    rng=self.rng,
+                )
+            due_at = incoming.received_at + delay
+            session.add(
+                models.ReplyJob(
+                    key=job_key,
+                    connection_id=connection.id,
+                    payload=json.loads(task.to_json()),
+                    due_at=due_at,
+                )
             )
-        due_at = incoming.received_at + delay
         await self.queue.schedule(task, due_at=due_at)
         _log(
             logging.INFO,
@@ -215,6 +258,10 @@ class Pipeline:
         """
         moment = now or datetime.now(UTC)
         async with self.database.session() as session, session.begin():
+            key = f"reply:{task.business_connection_id}:{task.contact_id}:{task.message_id}"
+            job = await session.get(models.ReplyJob, key)
+            if job is not None and job.completed_at is not None:
+                return LogAction.SKIPPED_INACTIVE
             connection = await load_connection(session, task.business_connection_id)
             if connection is None:
                 _log(logging.WARNING, "unknown_connection", connection_id=task.connection_id)
@@ -226,7 +273,27 @@ class Pipeline:
             if refusal is not None:
                 await self._log_task(session, connection, task, refusal)
                 return refusal
+            if moment - task.incoming_moment > MAX_REPLY_AGE:
+                await self._log_task(
+                    session, connection, task, LogAction.ERROR, error_code=STALE_REPLY
+                )
+                return LogAction.ERROR
 
+            # The rules may have changed during the delay: re-run the gate for the
+            # moment the message arrived, so an exclusion or schedule edit made in
+            # the meantime wins, while a reply due seconds after the window closes
+            # still goes out. The window limit was reserved by this very task, and
+            # pause/kill switch were checked above against the current moment.
+            contact = await load_contact_state(session, connection.id, task.contact_id)
+            gate = evaluate_gate(
+                replace(connection.policy, max_auto_replies_per_window=None, muted_until=None),
+                contact,
+                now=task.incoming_moment,
+            )
+            if not gate.is_allowed:
+                refusal = LogAction(gate.decision.value)
+                await self._log_task(session, connection, task, refusal)
+                return refusal
             overrides = await load_templates(session, connection.id)
 
         text = render(TemplateCode(task.template_code), overrides=overrides)
@@ -246,7 +313,11 @@ class Pipeline:
             and task.request_id is not None
             else None
         )
-        result = await self.sender.send(
+        result = await send_once(
+            self.database,
+            self.sender,
+            key=f"auto:{task.business_connection_id}:{task.contact_id}:{task.message_id}",
+            connection_id=connection.id,
             business_connection_id=connection.business_connection_id,
             chat_id=task.chat_id,
             text=text,
@@ -258,6 +329,18 @@ class Pipeline:
                     session, connection, task, LogAction.ERROR, error_code=result.error_code
                 )
             else:
+                already_recorded = await session.scalar(
+                    select(models.MessageLog.id)
+                    .where(
+                        models.MessageLog.connection_id == connection.id,
+                        models.MessageLog.contact_id == task.contact_id,
+                        models.MessageLog.tg_message_id == result.message_id,
+                        models.MessageLog.action == LogAction.REPLIED.value,
+                    )
+                    .limit(1)
+                )
+                if already_recorded is not None:
+                    return LogAction.REPLIED
                 await record_auto_reply(
                     session, connection.id, task.contact_id, at=at, window_key=task.window_key
                 )

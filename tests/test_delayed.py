@@ -39,6 +39,12 @@ class FakeSortedSet:
     def __init__(self) -> None:
         self.scores: dict[str, float] = {}
 
+    async def eval(self, script, numkeys, key, now, lease):
+        items = (await self.zrangebyscore(key, 0, float(now)))[:20]
+        for item in items:
+            self.scores[item] = float(lease)
+        return items
+
     async def zadd(self, name: str, mapping: dict[str, float]) -> int:
         added = sum(member not in self.scores for member in mapping)
         self.scores.update(mapping)
@@ -125,6 +131,8 @@ async def test_a_task_stays_put_until_its_delay_elapses() -> None:
     assert await queue.pop_due(now=NOW) == []
     assert await queue.pending() == 1
     assert await queue.pop_due(now=due_at) == [TASK]
+    assert await queue.pending() == 1
+    await queue.acknowledge(TASK)
     assert await queue.pending() == 0
 
 

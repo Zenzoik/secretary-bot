@@ -66,6 +66,8 @@ class ReplyTask:
 
 
 class SortedSetClient(Protocol):
+    async def eval(self, script: str, numkeys: int, *args: Any) -> Any: ...
+
     async def zadd(self, name: str, mapping: dict[str, float]) -> Any: ...
 
     async def zrangebyscore(self, name: str, min: float, max: float) -> list[str]: ...
@@ -96,15 +98,31 @@ class DelayedReplyQueue:
         second worker cannot send the same reply twice.
         """
         moment = now or datetime.now(UTC)
-        members = await self.client.zrangebyscore(self.key, 0, moment.timestamp())
-        claimed = []
-        for member in members:
-            if await self.client.zrem(self.key, member):
-                claimed.append(ReplyTask.from_json(member))
-        return claimed
+        members = await self.client.eval(
+            """
+            local items = redis.call('ZRANGEBYSCORE', KEYS[1], 0, ARGV[1], 'LIMIT', 0, 20)
+            for _, item in ipairs(items) do
+                redis.call('ZADD', KEYS[1], ARGV[2], item)
+            end
+            return items
+            """,
+            1,
+            self.key,
+            moment.timestamp(),
+            moment.timestamp() + 120,
+        )
+        return [ReplyTask.from_json(member) for member in members]
+
+    async def acknowledge(self, task: ReplyTask) -> None:
+        await self.client.zrem(self.key, task.to_json())
 
     async def pending(self) -> int:
         return await self.client.zcard(self.key)
+
+    async def snapshot(self) -> list[ReplyTask]:
+        """Every task Redis currently holds, leased or not."""
+        members = await self.client.zrangebyscore(self.key, float("-inf"), float("inf"))
+        return [ReplyTask.from_json(member) for member in members]
 
     async def cancel_connection(self, connection_id: int) -> int:
         """Remove every pending task owned by one revoked connection."""
