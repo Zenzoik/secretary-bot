@@ -35,9 +35,7 @@ class FakeModel:
     def __init__(self) -> None:
         self.transcripts: list[str] = []
 
-    async def summarize_dialogue(
-        self, transcript: str, *, system_prompt: str, model: str
-    ) -> str:
+    async def summarize_dialogue(self, transcript: str, *, system_prompt: str, model: str) -> str:
         self.transcripts.append(transcript)
         return json.dumps(
             {
@@ -242,7 +240,9 @@ async def test_summary_period_obeys_local_time_and_connection_state(database) ->
         SCHEDULED - timedelta(hours=24),
         SCHEDULED,
     )
-    assert summary_period(connection, now=NOW + timedelta(hours=1)) is None
+    assert summary_period(connection, now=NOW + timedelta(hours=1)) == summary_period(
+        connection, now=NOW
+    )
 
     async with database.session() as session, session.begin():
         row = await session.scalar(select(models.Connection))

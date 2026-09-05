@@ -7,12 +7,14 @@ from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 
 from secretary_bot import models
 from secretary_bot.classifier import ClassifierSettings
+from secretary_bot.delivery import send_once
 from secretary_bot.identities import contact_label
 from secretary_bot.retention import MessageCipher
+from secretary_bot.sender import BusinessReplySender
 from secretary_bot.storage import (
     ConnectionRecord,
     Database,
@@ -27,8 +29,14 @@ from secretary_bot.summary import DialogueSummary, SummaryLanguageModel, summari
 
 logger = logging.getLogger(__name__)
 
-SUMMARY_WINDOW = timedelta(minutes=30)
 SUMMARY_PERIOD = timedelta(hours=24)
+# Summaries go to the owner's own chat or channel, so a possible duplicate after a
+# lost Telegram response is acceptable; a permanently stuck issue is not.
+SUMMARY_RESEND_COOLDOWN = timedelta(minutes=10)
+# A run that still fails this long after its period is abandoned with an explicit
+# note, so that one broken destination cannot block every later issue.
+SUMMARY_ABANDON_AFTER = timedelta(days=3)
+ABANDONED = "ABANDONED"
 
 
 class SummaryBot(Protocol):
@@ -59,6 +67,42 @@ class DailySummary:
             destination = connection.summary_channel_id or connection.owner_chat_id
             if destination is None:
                 continue
+            async with self.database.session() as session:
+                pending = await session.scalar(
+                    select(models.SummaryRun)
+                    .where(
+                        models.SummaryRun.connection_id == connection.id,
+                        models.SummaryRun.status != "delivered",
+                        or_(
+                            models.SummaryRun.error_code.is_(None),
+                            models.SummaryRun.error_code != ABANDONED,
+                        ),
+                        models.SummaryRun.period_end <= period[1],
+                    )
+                    .order_by(models.SummaryRun.period_end)
+                    .limit(1)
+                )
+                last = await session.scalar(
+                    select(models.SummaryRun)
+                    .where(
+                        models.SummaryRun.connection_id == connection.id,
+                        or_(
+                            models.SummaryRun.status == "delivered",
+                            models.SummaryRun.error_code == ABANDONED,
+                        ),
+                    )
+                    .order_by(models.SummaryRun.period_end.desc())
+                    .limit(1)
+                )
+            if pending is not None and pending.period_end < moment - SUMMARY_ABANDON_AFTER:
+                await self._abandon(pending.id, destination=destination)
+                continue
+            if pending is not None:
+                period = pending.period_start, pending.period_end
+            elif last is not None and last.period_end < period[0]:
+                # Recover a missed interval before proceeding to the newest day.
+                # A long outage becomes one explicitly incomplete catch-up report.
+                period = last.period_end, period[0]
             try:
                 completed = await self._process(
                     connection,
@@ -104,6 +148,18 @@ class DailySummary:
                 )
             )
 
+        if not items and period_start < now - timedelta(hours=48):
+            run = await self._load_run(run_id)
+            if run.error_code != "RETENTION_GAP":
+                await self.bot.send_message(
+                    chat_id=destination,
+                    text=(
+                        "⚠️ Підсумок неповний: частина періоду вже поза "
+                        "48-годинним строком зберігання. "
+                        "Перевірте пропущені діалоги в Telegram."
+                    ),
+                )
+                await self._mark_error(connection.id, period_start, period_end, "RETENTION_GAP")
         if not items:
             items = await self._generate_items(
                 connection,
@@ -118,22 +174,38 @@ class DailySummary:
 
         run = await self._load_run(run_id)
         if run.telegram_message_id is None:
-            sent = await self.bot.send_message(
+            sent = await send_once(
+                self.database,
+                BusinessReplySender(self.bot),
+                key=f"summary-header:{run_id}",
+                connection_id=connection.id,
+                retry_uncertain_after=SUMMARY_RESEND_COOLDOWN,
+                business_connection_id=None,
                 chat_id=destination,
                 text=render_summary_header(period_end, items, connection.policy.timezone),
                 reply_markup=summary_header_keyboard(run_id),
             )
-            await self._save_run_message(run_id, getattr(sent, "message_id", None))
+            if not sent.is_sent:
+                raise RuntimeError(sent.error_code or "SUMMARY_SEND_FAILED")
+            await self._save_run_message(run_id, sent.message_id)
 
         for item in items:
             if item.telegram_message_id is not None:
                 continue
-            sent = await self.bot.send_message(
+            sent = await send_once(
+                self.database,
+                BusinessReplySender(self.bot),
+                key=f"summary-item:{item.id}",
+                connection_id=connection.id,
+                retry_uncertain_after=SUMMARY_RESEND_COOLDOWN,
+                business_connection_id=None,
                 chat_id=destination,
                 text=render_summary_item(item),
                 reply_markup=summary_item_keyboard(item.id, item.contact_username),
             )
-            await self._save_item_message(item.id, getattr(sent, "message_id", None))
+            if not sent.is_sent:
+                raise RuntimeError(sent.error_code or "SUMMARY_SEND_FAILED")
+            await self._save_item_message(item.id, sent.message_id)
         await self._mark_delivered(run_id, delivered_at=now)
         return True
 
@@ -264,7 +336,8 @@ class DailySummary:
                 raise LookupError("summary run not found")
             run.status = "delivered"
             run.delivered_at = delivered_at
-            run.error_code = None
+            if run.error_code != "RETENTION_GAP":
+                run.error_code = None
             morning_rows = await pending_morning_for_period(
                 session,
                 run.connection_id,
@@ -300,6 +373,28 @@ class DailySummary:
                 run.status = "error"
                 run.error_code = error_code[:200]
 
+    async def _abandon(self, run_id: int, *, destination: int) -> None:
+        """Stop retrying an issue that kept failing; later periods must not wait."""
+        async with self.database.session() as session, session.begin():
+            run = await session.get(models.SummaryRun, run_id)
+            if run is None:
+                return
+            run.status = "error"
+            run.error_code = ABANDONED
+            local_end = run.period_end.astimezone(UTC)
+        logger.error("daily summary abandoned: run_id=%s", run_id)
+        try:
+            await self.bot.send_message(
+                chat_id=destination,
+                text=(
+                    f"⚠️ Підсумок за {local_end:%d.%m.%Y} не вдалося надіслати кілька днів "
+                    "поспіль. Спроби припинено; тексти за цей період уже видалено. "
+                    "Перевірте діалоги в Telegram."
+                ),
+            )
+        except Exception as exc:
+            logger.warning("abandon notice failed: %s", type(exc).__name__)
+
 
 def summary_period(
     connection: ConnectionRecord, *, now: datetime
@@ -313,8 +408,8 @@ def summary_period(
         second=0,
         microsecond=0,
     )
-    if not scheduled <= local_now < scheduled + SUMMARY_WINDOW:
-        return None
+    if local_now < scheduled:
+        scheduled -= timedelta(days=1)
     period_end = scheduled.astimezone(UTC)
     return period_end - SUMMARY_PERIOD, period_end
 
