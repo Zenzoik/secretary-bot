@@ -314,6 +314,26 @@
     return entries.length ? entries.map(([code, count]) => `${labels[code] || code}: ${count}`).join(" · ") : "—";
   }
 
+  function fillMonthOptions(referenceMonth) {
+    const select = $("#analytics-month");
+    const previous = select.value;
+    const [year, month] = referenceMonth.split("-").map(Number);
+    const options = [];
+    for (let offset = 0; offset < 24; offset += 1) {
+      const point = new Date(Date.UTC(year, month - 1 - offset, 1));
+      const value = `${point.getUTCFullYear()}-${String(point.getUTCMonth() + 1).padStart(2, "0")}`;
+      const label = new Intl.DateTimeFormat("uk-UA", { month: "long", year: "numeric", timeZone: "UTC" }).format(point);
+      options.push(`<option value="${value}">${escapeHtml(label)}</option>`);
+    }
+    select.innerHTML = options.join("");
+    select.value = previous && options.some((option) => option.includes(`value="${previous}"`)) ? previous : referenceMonth;
+    const inTelegram = Boolean(tg?.initData);
+    $("#pdf-export-note").textContent = inTelegram
+      ? "PDF відкриється у зовнішньому браузері та буде доступний у його завантаженнях. Посилання одноразове."
+      : "PDF буде збережено у стандартну папку завантажень браузера.";
+    $("#download-monthly-pdf").textContent = inTelegram ? "Відкрити PDF у браузері" : "Завантажити PDF";
+  }
+
   function renderAnalytics() {
     const data = state.analytics;
     if (!data) return;
@@ -346,13 +366,18 @@
     try {
       state.analytics = await api(`/api/v1/analytics?${params}`);
       renderAnalytics();
-      if (!$("#analytics-month").value) $("#analytics-month").value = state.analytics.period.date_to.slice(0, 7);
+      if (!$("#analytics-month").options.length) fillMonthOptions(state.analytics.period.date_to.slice(0, 7));
     } catch (error) { toast(error.message, true); }
   }
 
   async function downloadMonthlyPdf() {
     const month = $("#analytics-month").value;
     if (!month) throw new Error("Оберіть місяць");
+    if (tg?.initData) {
+      const result = await api(`/api/v1/analytics/monthly-link?month=${encodeURIComponent(month)}`, { method: "POST" });
+      tg.openLink(result.url);
+      return "opened";
+    }
     const response = await fetch(`/api/v1/analytics/monthly.pdf?month=${encodeURIComponent(month)}`, {
       credentials: "same-origin",
       headers: authHeaders(),
@@ -370,6 +395,7 @@
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return "downloaded";
   }
 
   function bindEvents() {
@@ -469,8 +495,8 @@
     $("#log-filter").addEventListener("submit", (event) => { event.preventDefault(); loadLogs(); });
     $("#analytics-filter").addEventListener("submit", (event) => { event.preventDefault(); loadAnalytics(); });
     $("#download-monthly-pdf").addEventListener("click", (event) => withBusyButton(event.currentTarget, "Формуємо PDF…", async () => {
-      await downloadMonthlyPdf();
-      toast("PDF-звіт завантажено");
+      const result = await downloadMonthlyPdf();
+      toast(result === "opened" ? "PDF відкрито у браузері" : "PDF збережено у завантаження браузера");
     }));
     $$(".browser-link-action").forEach((button) => button.addEventListener("click", async () => { try { const result = await api("/api/v1/auth/browser-link", { method: "POST" }); await copyText(result.url); toast("Одноразове посилання скопійовано"); } catch (error) { toast(error.message, true); } }));
     $("#logout").addEventListener("click", async () => { await api("/api/v1/auth/logout", { method: "POST" }); location.reload(); });

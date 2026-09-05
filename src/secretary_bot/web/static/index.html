@@ -9,9 +9,9 @@
     <meta property="og:description" content="Налаштування без зайвих кроків">
     <meta property="og:image" content="{{BASE_URL}}/assets/og.png">
     <title>Personal Secretary — налаштування</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260905-1">
+    <link rel="stylesheet" href="/assets/styles.css?v=20260905-2">
     <script src="https://telegram.org/js/telegram-web-app.js?59"></script>
-    <script src="/assets/app.js?v=20260905-1" defer></script>
+    <script src="/assets/app.js?v=20260905-2" defer></script>
   </head>
   <body>
     <div class="app-shell" id="app" aria-busy="true">
@@ -228,9 +228,9 @@
                 </table>
               </div>
               <section class="pdf-export" aria-labelledby="pdf-export-title">
-                <div><strong id="pdf-export-title">Місячний PDF-звіт</strong><small>Містить усі контакти та ті самі перевірені показники. Для стабільного завантаження відкрийте панель у браузері.</small></div>
-                <label>Місяць<input id="analytics-month" type="month" required></label>
-                <button class="secondary" id="download-monthly-pdf" type="button">Завантажити PDF</button>
+                <div><strong id="pdf-export-title">Місячний PDF-звіт</strong><small id="pdf-export-note">Містить усі контакти та ті самі перевірені показники.</small></div>
+                <label>Звітний місяць<select id="analytics-month" required></select></label>
+                <button class="secondary" id="download-monthly-pdf" type="button">Відкрити PDF</button>
               </section>
             </div>
           </section>

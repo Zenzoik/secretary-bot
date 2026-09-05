@@ -239,6 +239,12 @@ async def test_three_day_analytics_and_monthly_pdf_include_all_contacts(
             "/api/v1/analytics/monthly.pdf?month=2026-09",
             headers=headers(),
         )
+        link_response = await client.post(
+            "/api/v1/analytics/monthly-link?month=2026-09",
+            headers=headers(),
+        )
+        browser_pdf = await client.get(link_response.json()["url"], follow_redirects=True)
+        reused_link = await client.get(link_response.json()["url"], follow_redirects=False)
 
     assert response.status_code == 200
     payload = response.json()
@@ -272,6 +278,11 @@ async def test_three_day_analytics_and_monthly_pdf_include_all_contacts(
     assert "Тарас Замовник" in pdf_text
     assert "Контакт без подій" in pdf_text
     assert "1250.50 UAH" in pdf_text
+    assert link_response.status_code == 200
+    assert browser_pdf.status_code == 200
+    assert browser_pdf.headers["content-type"] == "application/pdf"
+    assert browser_pdf.content.startswith(b"%PDF-")
+    assert reused_link.status_code == 401
 
 
 @pytest.mark.asyncio

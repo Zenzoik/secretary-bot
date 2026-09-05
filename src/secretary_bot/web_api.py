@@ -567,14 +567,7 @@ def build_web_router(
 
     @router.get("/api/v1/analytics/monthly.pdf")
     async def monthly_analytics_pdf(request: Request, month: str) -> Response:
-        try:
-            month_start = datetime.strptime(month, "%Y-%m").date().replace(day=1)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail="Місяць має формат РРРР-ММ") from exc
-        if month_start.strftime("%Y-%m") != month:
-            raise HTTPException(status_code=422, detail="Місяць має формат РРРР-ММ")
-        next_month = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
-        month_end = next_month - timedelta(days=1)
+        month_start, month_end = _month_bounds(month)
         async with database.session() as session, session.begin():
             principal = await api.authorize(session, request)
             report = await build_analytics(
@@ -593,6 +586,24 @@ def build_web_router(
                 )
             },
         )
+
+    @router.post("/api/v1/analytics/monthly-link")
+    async def monthly_analytics_link(request: Request, month: str) -> dict[str, str]:
+        _month_bounds(month)
+        async with database.session() as session, session.begin():
+            principal = await api.authorize(session, request)
+            token = await create_web_token(
+                session,
+                user_id=principal.user.user_id,
+                kind="exchange",
+                now=datetime.now(UTC),
+                ttl=EXCHANGE_TTL,
+            )
+        base = (settings.public_base_url or str(request.base_url)).rstrip("/")
+        return {
+            "url": f"{base}/web/analytics/{token}/{month}",
+            "expires_in": "15m",
+        }
 
     @router.post("/api/v1/auth/browser-link")
     async def browser_link(request: Request) -> dict[str, str]:
@@ -627,6 +638,29 @@ def build_web_router(
         )
         return response
 
+    @router.get("/web/analytics/{token}/{month}")
+    async def exchange_monthly_analytics(token: str, month: str) -> Response:
+        _month_bounds(month)
+        async with database.session() as session, session.begin():
+            consumed = await consume_exchange(session, token=token, now=datetime.now(UTC))
+        if consumed is None:
+            raise _unauthorized()
+        _, session_token = consumed
+        response = RedirectResponse(
+            url=f"/api/v1/analytics/monthly.pdf?month={month}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+        response.set_cookie(
+            SESSION_COOKIE,
+            session_token,
+            max_age=int(timedelta(days=30).total_seconds()),
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            path="/",
+        )
+        return response
+
     @router.post("/api/v1/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
     async def logout(request: Request) -> Response:
         token = request.cookies.get(SESSION_COOKIE)
@@ -638,6 +672,17 @@ def build_web_router(
         return response
 
     return router
+
+
+def _month_bounds(month: str) -> tuple[date, date]:
+    try:
+        month_start = datetime.strptime(month, "%Y-%m").date().replace(day=1)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Місяць має формат РРРР-ММ") from exc
+    if month_start.strftime("%Y-%m") != month:
+        raise HTTPException(status_code=422, detail="Місяць має формат РРРР-ММ")
+    next_month = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+    return month_start, next_month - timedelta(days=1)
 
 
 async def _bootstrap(session: AsyncSession, principal: Principal) -> dict[str, Any]:
