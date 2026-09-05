@@ -302,7 +302,9 @@ class EscalationActions:
             ):
                 return False
             if request.owner_decision == "declined":
-                await self._answer(query, "Відмову вже надіслано.")
+                await self._finalize_owner(
+                    query, "⛔ Відмову вже надіслано", "Відмову вже надіслано"
+                )
                 return True
             business_connection_id = connection.business_connection_id
             contact_id = request.contact_id

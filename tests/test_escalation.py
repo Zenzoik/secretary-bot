@@ -170,6 +170,13 @@ async def test_owner_decline_keeps_paid_count_and_sends_configured_text(database
     assert "немає можливості відповісти терміново" in bot.sent[-1]["text"]
     assert bot.edited[-1]["reply_markup"] is None
 
+    sent_count = len(bot.sent)
+    assert await actions.handle_callback(
+        callback("decline", request_id, user_id=42), now=NOW
+    )
+    assert len(bot.sent) == sent_count
+    assert bot.edited[-1]["reply_markup"] is None
+
 
 @pytest.mark.parametrize(
     ("data", "expected"),
