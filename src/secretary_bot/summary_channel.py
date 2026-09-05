@@ -88,7 +88,7 @@ class SummaryChannelConnector:
             prepared = await self.bot.save_prepared_keyboard_button(
                 user_id=owner_user_id,
                 button=KeyboardButton(
-                    text="Обрати канал для самарі",
+                    text="Обрати канал для підсумків",
                     style="primary",
                     request_chat=KeyboardButtonRequestChat(
                         request_id=request.id,
@@ -166,7 +166,8 @@ class SummaryChannelConnector:
             await self.bot.send_message(
                 chat_id=message.chat.id,
                 text=(
-                    f"✅ Канал «{channel.title}» підключено. Наступне щоденне самарі надійде туди."
+                    f"✅ Канал «{channel.title}» підключено. "
+                    "Наступний щоденний підсумок надійде туди."
                 ),
             )
         elif error is not None:
@@ -210,9 +211,10 @@ def parse_channel_reference(reference: str) -> int | str:
         return value
     if "t.me/+" in value or "joinchat" in value:
         raise SummaryChannelError(
-            "Посилання-запрошення не містить ID. Скопіюйте посилання на допис каналу."
+            "За посиланням-запрошенням канал не визначити. "
+            "Скопіюйте посилання на допис каналу."
         )
-    raise SummaryChannelError("Вкажіть @username, числовий ID або посилання на допис у каналі.")
+    raise SummaryChannelError("Вкажіть @username або посилання на допис у каналі.")
 
 
 def _save_channel(connection: models.Connection, channel: ConnectedChannel) -> None:

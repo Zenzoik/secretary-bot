@@ -68,6 +68,7 @@ class ConnectionRecord:
 class ContactCardRecord:
     contact_id: int
     contact_name: str | None
+    contact_username: str | None
     auto_reply_count: int
     last_auto_reply_at: datetime | None
     exclusion_until: datetime | None
@@ -79,6 +80,7 @@ class ContactCardRecord:
 class AccessUserRecord:
     user_id: int
     username: str | None
+    display_name: str | None
     role: str
     status: str
     onboarding_state: str
@@ -117,7 +119,11 @@ class Database:
 
 
 async def ensure_master(
-    session: AsyncSession, user_id: int, *, username: str | None = None
+    session: AsyncSession,
+    user_id: int,
+    *,
+    username: str | None = None,
+    display_name: str | None = None,
 ) -> AccessUserRecord:
     """Create the environment-owned master, refusing a second master."""
     other_master = await session.scalar(
@@ -132,6 +138,7 @@ async def ensure_master(
         row = models.AccessUser(user_id=user_id)
         session.add(row)
     row.username = username or row.username
+    row.display_name = display_name or row.display_name
     row.role = "master"
     row.status = "active"
     row.onboarding_state = "ready"
@@ -144,6 +151,22 @@ async def ensure_master(
 async def load_access_user(session: AsyncSession, user_id: int) -> AccessUserRecord | None:
     row = await session.get(models.AccessUser, user_id)
     return None if row is None else _access_record(row)
+
+
+async def sync_access_identity(
+    session: AsyncSession,
+    user_id: int,
+    *,
+    username: str | None,
+    display_name: str | None,
+) -> AccessUserRecord | None:
+    row = await session.get(models.AccessUser, user_id)
+    if row is None:
+        return None
+    row.username = username or None
+    row.display_name = display_name or row.display_name
+    await session.flush()
+    return _access_record(row)
 
 
 async def set_onboarding_state(
@@ -254,6 +277,7 @@ async def consume_access_invite(
     user_id: int,
     username: str | None,
     now: datetime,
+    display_name: str | None = None,
 ) -> AccessUserRecord | None:
     consumed = await session.execute(
         update(models.AccessInvite)
@@ -276,9 +300,11 @@ async def consume_access_invite(
         return _access_record(row)
     if row.status == "active":
         row.username = username or row.username
+        row.display_name = display_name or row.display_name
         await session.flush()
         return _access_record(row)
     row.username = username
+    row.display_name = display_name
     row.role = "user"
     row.status = "pending"
     row.onboarding_state = "awaiting_connection"
@@ -563,6 +589,7 @@ async def load_contact_card(
     )
     activity = await session.get(models.ContactActivity, (connection_id, contact_id))
     contact_name = None if activity is None else activity.contact_name
+    contact_username = None if activity is None else activity.contact_username
     if contact_name is None:
         contact_name = None if exclusion is None else exclusion.contact_name
     if contact_name is None:
@@ -579,6 +606,7 @@ async def load_contact_card(
     return ContactCardRecord(
         contact_id=contact_id,
         contact_name=contact_name,
+        contact_username=contact_username,
         auto_reply_count=auto_reply_count,
         last_auto_reply_at=last_auto_reply_at,
         exclusion_until=None if exclusion is None else exclusion.until,
@@ -691,9 +719,7 @@ async def load_contact_state(
     return ContactState(
         exclusion=None if exclusion_row is None else Exclusion(until=exclusion_row.until),
         last_auto_reply_window_key=None if activity is None else activity.quiet_window_key,
-        auto_reply_count_in_window=(
-            0 if activity is None else activity.quiet_window_reply_count
-        ),
+        auto_reply_count_in_window=(0 if activity is None else activity.quiet_window_reply_count),
         windows=windows,
     )
 
@@ -900,9 +926,7 @@ async def load_retained_dialogues(
             models.ContactActivity.contact_id.in_(grouped),
         )
     )
-    contacts = {
-        row.contact_id: (row.contact_name, row.contact_username) for row in activity_rows
-    }
+    contacts = {row.contact_id: (row.contact_name, row.contact_username) for row in activity_rows}
     return [
         RetainedDialogue(
             contact_id=contact_id,
@@ -1001,10 +1025,7 @@ async def request_counts_for_period(
         )
         .group_by(models.ContactRequest.contact_id)
     )
-    return {
-        contact_id: (total - paid, paid)
-        for contact_id, total, paid in rows
-    }
+    return {contact_id: (total - paid, paid) for contact_id, total, paid in rows}
 
 
 def normalize_contact_username(username: str | None) -> str | None:
@@ -1235,6 +1256,7 @@ def _access_record(row: models.AccessUser) -> AccessUserRecord:
     return AccessUserRecord(
         user_id=row.user_id,
         username=row.username,
+        display_name=row.display_name,
         role=row.role,
         status=row.status,
         onboarding_state=row.onboarding_state,

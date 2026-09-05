@@ -91,8 +91,7 @@ class Connection(Base):
             name="bot_delay_within_max",
         ),
         CheckConstraint(
-            "max_auto_replies_per_window IS NULL OR "
-            "max_auto_replies_per_window BETWEEN 1 AND 100",
+            "max_auto_replies_per_window IS NULL OR max_auto_replies_per_window BETWEEN 1 AND 100",
             name="max_auto_replies_per_window_range",
         ),
         CheckConstraint(
@@ -116,9 +115,7 @@ class Connection(Base):
     delay_max_seconds: Mapped[int] = mapped_column(SmallInteger, server_default=sql_text("60"))
     bot_delay_seconds: Mapped[int] = mapped_column(SmallInteger, server_default=sql_text("5"))
     max_auto_replies_per_window: Mapped[int | None] = mapped_column(SmallInteger)
-    escalation_enabled: Mapped[bool] = mapped_column(
-        Boolean, server_default=sql_text("false")
-    )
+    escalation_enabled: Mapped[bool] = mapped_column(Boolean, server_default=sql_text("false"))
     escalation_price_amount: Mapped[Decimal] = mapped_column(
         Numeric(12, 2), server_default=sql_text("0")
     )
@@ -138,9 +135,7 @@ class Connection(Base):
     )
     escalation_decline_text: Mapped[str] = mapped_column(
         Text,
-        server_default=sql_text(
-            "'На жаль, зараз немає можливості відповісти терміново.'"
-        ),
+        server_default=sql_text("'На жаль, зараз немає можливості відповісти терміново.'"),
     )
     mark_read: Mapped[bool] = mapped_column(Boolean, server_default=sql_text("false"))
     kill_switch: Mapped[bool] = mapped_column(Boolean, server_default=sql_text("false"))
@@ -174,6 +169,7 @@ class AccessUser(Base):
 
     user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     username: Mapped[str | None] = mapped_column(Text)
+    display_name: Mapped[str | None] = mapped_column(Text)
     role: Mapped[str] = mapped_column(Text, server_default=sql_text("'user'"))
     status: Mapped[str] = mapped_column(Text, server_default=sql_text("'pending'"))
     onboarding_state: Mapped[str] = mapped_column(
@@ -330,15 +326,9 @@ class ContactActivity(Base):
     owner_last_reply_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
     last_auto_reply_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
     quiet_window_key: Mapped[str | None] = mapped_column(Text)
-    quiet_window_reply_count: Mapped[int] = mapped_column(
-        Integer, server_default=sql_text("0")
-    )
-    off_hours_request_count: Mapped[int] = mapped_column(
-        Integer, server_default=sql_text("0")
-    )
-    paid_escalation_count: Mapped[int] = mapped_column(
-        Integer, server_default=sql_text("0")
-    )
+    quiet_window_reply_count: Mapped[int] = mapped_column(Integer, server_default=sql_text("0"))
+    off_hours_request_count: Mapped[int] = mapped_column(Integer, server_default=sql_text("0"))
+    paid_escalation_count: Mapped[int] = mapped_column(Integer, server_default=sql_text("0"))
 
 
 class ContactRequest(Base):

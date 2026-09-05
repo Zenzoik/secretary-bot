@@ -459,7 +459,7 @@ async def test_today_lists_only_the_owners_local_day(database: Database) -> None
     bot = FakeBot()
     assert await ControlPlane(database, bot).handle_message(owner_message("/today"), now=NOW)
 
-    assert "dry_run/general: 1" in bot.sent[-1]["text"]
+    assert "показано чернеток · звичайні: 1" in bot.sent[-1]["text"]
     assert "skipped_schedule" not in bot.sent[-1]["text"]
 
 
@@ -483,7 +483,8 @@ async def test_business_deep_link_opens_the_requested_contact_card(database: Dat
         owner_message("/start bizChat100"), now=NOW
     )
 
-    assert "Контакт 100" in bot.sent[-1]["text"]
+    assert "Контакт без імені" in bot.sent[-1]["text"]
+    assert "100" not in bot.sent[-1]["text"]
     callbacks = [
         button.callback_data
         for row in bot.sent[-1]["reply_markup"].inline_keyboard

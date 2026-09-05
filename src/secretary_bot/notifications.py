@@ -26,6 +26,7 @@ class Preview:
     occurred_at: datetime
     category: str
     reply_text: str
+    contact_username: str | None = None
     confidence: str | None = None
 
     def render(self) -> str:
@@ -33,6 +34,7 @@ class Preview:
             occurred_at=self.occurred_at,
             contact_id=self.contact_id,
             contact_name=self.contact_name,
+            contact_username=self.contact_username,
             category=self.category,
             confidence=self.confidence,
             reply_text=self.reply_text,

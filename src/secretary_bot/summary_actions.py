@@ -19,6 +19,7 @@ from secretary_bot import texts as ui
 from secretary_bot.actions import LogAction
 from secretary_bot.callbacks import finalize_callback
 from secretary_bot.daily_summary import summary_item_keyboard
+from secretary_bot.identities import contact_label
 from secretary_bot.retention import MESSAGE_RETENTION, MessageCipher, MessageContext
 from secretary_bot.sender import BusinessReplySender, SendOutcome
 from secretary_bot.storage import (
@@ -55,17 +56,13 @@ class SummaryActions:
     sender: BusinessReplySender
     cipher: MessageCipher | None = None
 
-    async def handle_callback(
-        self, query: CallbackQuery, *, now: datetime | None = None
-    ) -> bool:
+    async def handle_callback(self, query: CallbackQuery, *, now: datetime | None = None) -> bool:
         direct = parse_direct_reply_callback(query.data)
         moment = now or datetime.now(UTC)
         if direct is not None:
             action, contact_id = direct
             if action == "select":
-                return await self._request_direct_reply(
-                    query, contact_id=contact_id, now=moment
-                )
+                return await self._request_direct_reply(query, contact_id=contact_id, now=moment)
             return await self._cancel_direct_reply(query)
 
         parsed = parse_summary_callback(query.data)
@@ -226,9 +223,7 @@ class SummaryActions:
             )
         return True
 
-    async def _request_reply(
-        self, query: CallbackQuery, *, item_id: int, now: datetime
-    ) -> bool:
+    async def _request_reply(self, query: CallbackQuery, *, item_id: int, now: datetime) -> bool:
         async with self.database.session() as session, session.begin():
             target = await _owned_item(session, owner_user_id=query.from_user.id, item_id=item_id)
             if target is None:
@@ -253,7 +248,10 @@ class SummaryActions:
                 state.expires_at = now + REPLY_STATE_TTL
         prompt = await self.bot.send_message(
             chat_id=query.from_user.id,
-            text=f"✍️ Напишіть відповідь для {item.contact_name or f'ID {item.contact_id}' }.",
+            text=(
+                "✍️ Напишіть відповідь для "
+                f"{contact_label(item.contact_name, item.contact_username)}."
+            ),
             reply_markup=ForceReply(
                 selective=True,
                 input_field_placeholder="Відповідь буде надіслана від бота",
@@ -293,9 +291,7 @@ class SummaryActions:
                         .limit(20)
                     )
                 )
-                response_text = (
-                    ui.DIRECT_REPLY_SELECT if contacts else ui.DIRECT_REPLY_NO_CONTACTS
-                )
+                response_text = ui.DIRECT_REPLY_SELECT if contacts else ui.DIRECT_REPLY_NO_CONTACTS
                 keyboard = _direct_reply_contacts_keyboard(contacts) if contacts else None
                 await session.execute(
                     delete(models.DirectReplyState).where(
@@ -328,9 +324,7 @@ class SummaryActions:
                     query.id, text=ui.DIRECT_REPLY_NO_PERMISSION, show_alert=True
                 )
                 return True
-            contact = await session.get(
-                models.ContactActivity, (connection.id, contact_id)
-            )
+            contact = await session.get(models.ContactActivity, (connection.id, contact_id))
             if contact is None or contact.last_incoming_at is None:
                 return False
             await session.execute(
@@ -350,11 +344,11 @@ class SummaryActions:
                 state.contact_id = contact_id
                 state.prompt_message_id = None
                 state.expires_at = now + REPLY_STATE_TTL
-            contact_label = contact.contact_name or f"ID {contact_id}"
+            selected_label = contact_label(contact.contact_name, contact.contact_username)
 
         prompt = await self.bot.send_message(
             chat_id=query.from_user.id,
-            text=f"✍️ Напишіть повідомлення для {contact_label}.",
+            text=f"✍️ Напишіть повідомлення для {selected_label}.",
             reply_markup=ForceReply(
                 selective=True,
                 input_field_placeholder="Повідомлення буде надіслане від бота",
@@ -367,7 +361,7 @@ class SummaryActions:
         await finalize_callback(
             self.bot,
             query,
-            note=f"✍️ Обрано: {contact_label}",
+            note=f"✍️ Обрано: {selected_label}",
             toast="Форму повідомлення відкрито",
         )
         return True
@@ -441,9 +435,7 @@ class SummaryActions:
 
     async def _open_chat(self, query: CallbackQuery, *, item_id: int) -> bool:
         async with self.database.session() as session:
-            target = await _owned_item(
-                session, owner_user_id=query.from_user.id, item_id=item_id
-            )
+            target = await _owned_item(session, owner_user_id=query.from_user.id, item_id=item_id)
             if target is None:
                 return False
             item, _ = target
@@ -467,16 +459,12 @@ class SummaryActions:
             return True
 
         async with self.database.session() as session, session.begin():
-            target = await _owned_item(
-                session, owner_user_id=query.from_user.id, item_id=item_id
-            )
+            target = await _owned_item(session, owner_user_id=query.from_user.id, item_id=item_id)
             if target is None:
                 return False
             item, connection = target
             item.contact_username = username
-            activity = await session.get(
-                models.ContactActivity, (connection.id, item.contact_id)
-            )
+            activity = await session.get(models.ContactActivity, (connection.id, item.contact_id))
             if activity is not None:
                 activity.contact_username = username
 
@@ -527,12 +515,7 @@ def _direct_reply_contacts_keyboard(
 ) -> InlineKeyboardMarkup:
     rows = []
     for contact in contacts:
-        name = (contact.contact_name or "").strip()
-        username = (contact.contact_username or "").strip()
-        if not name or name == ".":
-            name = f"@{username}" if username else f"ID {contact.contact_id}"
-        elif username:
-            name = f"{name} · @{username}"
+        name = contact_label(contact.contact_name, contact.contact_username)
         rows.append(
             [
                 InlineKeyboardButton(
@@ -541,9 +524,7 @@ def _direct_reply_contacts_keyboard(
                 )
             ]
         )
-    rows.append(
-        [InlineKeyboardButton(text="Скасувати", callback_data="direct:cancel:0")]
-    )
+    rows.append([InlineKeyboardButton(text="Скасувати", callback_data="direct:cancel:0")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

@@ -95,9 +95,7 @@ class Pipeline:
                 )
                 contact = await load_contact_state(session, connection.id, incoming.contact_id)
                 if contact.exclusion is None or not contact.exclusion.covers(incoming.received_at):
-                    await self._capture_incoming(
-                        session, connection, incoming, direction="out"
-                    )
+                    await self._capture_incoming(session, connection, incoming, direction="out")
                 return
             if incoming.filter_result is HardFilterResult.UNSUPPORTED_CONTENT:
                 await record_incoming(
@@ -181,6 +179,7 @@ class Pipeline:
             else str(classification.confidence),
             window_key=gate.window_key,
             contact_name=incoming.contact_name,
+            contact_username=incoming.contact_username,
             request_id=request_id,
         )
         if connection.sender_identity == "bot":
@@ -263,9 +262,7 @@ class Pipeline:
                     session, connection.id, task.contact_id, at=at, window_key=task.window_key
                 )
                 if task.request_id is not None:
-                    await set_request_reply_message(
-                        session, task.request_id, result.message_id
-                    )
+                    await set_request_reply_message(session, task.request_id, result.message_id)
                 await self._log_task(
                     session,
                     connection,
@@ -324,6 +321,7 @@ class Pipeline:
                 log_id=log_id,
                 contact_id=task.contact_id,
                 contact_name=task.contact_name,
+                contact_username=task.contact_username,
                 occurred_at=local_time,
                 category=task.category,
                 confidence=task.confidence,

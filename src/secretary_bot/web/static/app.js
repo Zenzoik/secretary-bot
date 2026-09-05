@@ -2,11 +2,11 @@
   "use strict";
 
   const tg = window.Telegram?.WebApp;
-  const state = { bootstrap: null, contacts: [], selectedContact: null, analytics: null, activeView: "overview" };
+  const state = { bootstrap: null, contacts: [], logContacts: [], selectedContact: null, analytics: null, activeView: "overview" };
   const titles = {
     overview: "Огляд", schedule: "Розклад", contacts: "Контакти",
-    templates: "Шаблони", classifier: "Класифікація", summary: "Самарі",
-    analytics: "Аналітика", logs: "Журнал",
+    templates: "Шаблони", classifier: "Типи звернень", summary: "Підсумки",
+    analytics: "Аналітика", logs: "Історія дій",
   };
   const actions = ["replied", "dry_run", "skipped_schedule", "skipped_excluded", "skipped_owner_replied", "skipped_window_limit", "skipped_kill_switch", "skipped_inactive", "skipped_unsupported_content", "error"];
   const actionLabels = {
@@ -61,6 +61,13 @@
     return String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
   }
 
+  function contactName(contact) {
+    return contact.contact_label || contact.contact_name || (contact.contact_username ? `@${contact.contact_username}` : "Контакт без імені");
+  }
+
+  const categoryLabels = { general: "Звичайне звернення", money: "Питання про оплату", unknown: "Без типу" };
+  const templateLabels = { off_hours_default: "Звичайна відповідь", money_priority: "Питання про оплату" };
+
   async function submit(form, callback) {
     const button = $("button[type=submit]", form);
     const original = button.textContent;
@@ -111,9 +118,9 @@
     const live = !connection.dry_run && connection.is_active && !connection.kill_switch;
     const rights = connection.rights || {};
     $("#connection-pill").className = `connection-pill ${live ? "live" : connection.is_active ? "" : "off"}`;
-    $("#connection-pill span:last-child").textContent = live ? "Live" : connection.dry_run ? "Dry-run" : "Зупинено";
+    $("#connection-pill span:last-child").textContent = live ? "Активний" : connection.dry_run ? "Чернетки" : "Зупинено";
     $("#status-grid").innerHTML = [
-      ["Режим", live ? "Live" : connection.dry_run ? "Dry-run" : "Зупинено", live ? "Відповіді активні" : "Перевірте стан"],
+      ["Режим", live ? "Відповідає клієнтам" : connection.dry_run ? "Лише чернетки" : "Зупинено", live ? "Автовідповіді активні" : connection.dry_run ? "Клієнти не отримують відповіді" : "Перевірте стан"],
       ["Відправник", delivery.sender_identity === "bot" ? "Секретар" : "Власник", delivery.sender_identity === "bot" ? "З видимим підписом" : "Без підпису"],
       ["Затримка", delivery.sender_identity === "bot" ? `${delivery.bot_delay_seconds}–${Math.min(delivery.delay_max_seconds, 60)} с` : `${delivery.delay_min_seconds}–${delivery.delay_max_seconds} с`, "Випадковий інтервал"],
       ["Права", rights.can_reply ? (rights.can_read_messages ? "Відповідь + читання" : "Тільки відповідь") : "Немає відповіді", rights.can_reply ? "Telegram Business" : "Потрібна увага"],
@@ -195,7 +202,7 @@
         <label>Назва<input class="direction-label" maxlength="80" value="${escapeHtml(direction.label)}" required></label>
         <label>Опис<input class="direction-description" maxlength="500" value="${escapeHtml(direction.description)}" required></label>
         <label class="keywords">Ключові слова, через кому<input class="direction-keywords" value="${escapeHtml(direction.keywords.join(", "))}"></label>
-        <label class="switch-row"><span><strong>Напрямок активний</strong><small>${direction.code}</small></span><input class="direction-active" type="checkbox" role="switch" ${direction.is_active ? "checked" : ""} ${direction.code === "general" ? "disabled" : ""}></label>
+        <label class="switch-row"><span><strong>Тип активний</strong><small>${escapeHtml(categoryLabels[direction.code] || direction.label)}</small></span><input class="direction-active" type="checkbox" role="switch" ${direction.is_active ? "checked" : ""} ${direction.code === "general" ? "disabled" : ""}></label>
       </article>`).join("");
     form.elements.system_prompt.value = data.system_prompt;
     form.elements.model.value = data.model;
@@ -217,8 +224,8 @@
     const connected = Boolean(data.summary_channel_id);
     const channelName = data.summary_channel_title || (connected ? "Підключений Telegram-канал" : "");
     $("#summary-channel-state").textContent = connected
-      ? `${channelName} · щоденне самарі надходитиме в канал.`
-      : "Канал не підключено — самарі надходитиме в особистий чат.";
+      ? `${channelName} · щоденний підсумок надходитиме в канал.`
+      : "Канал не підключено — підсумок надходитиме в особистий чат.";
     $("#disconnect-summary-channel").classList.toggle("hidden", !connected);
     $("#choose-summary-channel").classList.toggle("hidden", !tg?.requestChat);
     if (!tg?.requestChat) $("#summary-channel-fallback").open = true;
@@ -271,7 +278,7 @@
       list.innerHTML = '<div class="empty-row">Контакти з’являться після першого вхідного повідомлення.</div>';
       return;
     }
-    list.innerHTML = state.contacts.map((contact) => `<button type="button" class="contact-item ${state.selectedContact?.contact_id === contact.contact_id ? "active" : ""}" data-contact-id="${contact.contact_id}"><strong>${escapeHtml(contact.contact_name || `Контакт ${contact.contact_id}`)}</strong><small>${formatDate(contact.last_incoming_at)} · ${contact.auto_reply_count} відповідей · ${contact.paid_escalation_count}/${contact.off_hours_request_count} платних</small></button>`).join("");
+    list.innerHTML = state.contacts.map((contact) => `<button type="button" class="contact-item ${state.selectedContact?.contact_id === contact.contact_id ? "active" : ""}" data-contact-id="${contact.contact_id}"><strong>${escapeHtml(contactName(contact))}</strong><small>Останнє повідомлення: ${formatDate(contact.last_incoming_at)} · відповідей: ${contact.auto_reply_count} · платних звернень: ${contact.paid_escalation_count} із ${contact.off_hours_request_count}</small></button>`).join("");
     $$(".contact-item", list).forEach((button) => button.addEventListener("click", () => selectContact(Number(button.dataset.contactId))));
   }
 
@@ -283,8 +290,8 @@
     form.classList.remove("empty");
     $("#contact-empty").classList.add("hidden");
     $("#contact-fields").classList.remove("hidden");
-    $("#contact-title").textContent = state.selectedContact.contact_name || `Контакт ${contactId}`;
-    $("#contact-meta").textContent = `ID ${contactId} · останнє повідомлення ${formatDate(state.selectedContact.last_incoming_at)}`;
+    $("#contact-title").textContent = contactName(state.selectedContact);
+    $("#contact-meta").textContent = `Останнє повідомлення: ${formatDate(state.selectedContact.last_incoming_at)}`;
     $(`input[name=exclusion][value=${state.selectedContact.exclusion}]`, form).checked = true;
     form.elements.exclusion_until.value = state.selectedContact.exclusion_until ? new Date(state.selectedContact.exclusion_until).toISOString().slice(0, 16) : "";
     const windows = $("#contact-windows");
@@ -294,12 +301,19 @@
 
   async function loadLogs() {
     const form = $("#log-filter");
+    if (!state.logContacts.length) {
+      const contacts = await api("/api/v1/contacts");
+      state.logContacts = contacts.items;
+      const selected = form.elements.contact_id.value;
+      form.elements.contact_id.innerHTML = '<option value="">Усі контакти</option>' + state.logContacts.map((contact) => `<option value="${contact.contact_id}">${escapeHtml(contactName(contact))}</option>`).join("");
+      form.elements.contact_id.value = selected;
+    }
     const params = new URLSearchParams();
     if (form.elements.contact_id.value) params.set("contact_id", form.elements.contact_id.value);
     if (form.elements.action.value) params.set("action", form.elements.action.value);
     try {
       const result = await api(`/api/v1/logs?${params}`);
-      $("#log-rows").innerHTML = result.items.length ? result.items.map((row) => `<tr><td>${formatDate(row.occurred_at)}</td><td>${row.contact_id}</td><td>${escapeHtml(actionLabels[row.action] || row.action)}</td><td>${escapeHtml(row.category || "—")}</td><td>${escapeHtml(row.error_code || row.template_code || "—")}</td></tr>`).join("") : '<tr><td class="empty-row" colspan="5">За вибраними фільтрами записів немає.</td></tr>';
+      $("#log-rows").innerHTML = result.items.length ? result.items.map((row) => `<tr><td>${formatDate(row.occurred_at)}</td><td>${escapeHtml(row.contact_label)}</td><td>${escapeHtml(actionLabels[row.action] || row.action)}</td><td>${escapeHtml(categoryLabels[row.category] || "—")}</td><td>${escapeHtml(row.error_code || templateLabels[row.template_code] || "—")}</td></tr>`).join("") : '<tr><td class="empty-row" colspan="5">За вибраними фільтрами записів немає.</td></tr>';
     } catch (error) { toast(error.message, true); }
   }
 
@@ -309,9 +323,8 @@
   }
 
   function formatCategories(categories) {
-    const labels = { general: "Загальне", money: "Оплата", unknown: "Без напрямку" };
     const entries = Object.entries(categories || {});
-    return entries.length ? entries.map(([code, count]) => `${labels[code] || code}: ${count}`).join(" · ") : "—";
+    return entries.length ? entries.map(([code, count]) => `${categoryLabels[code] || code}: ${count}`).join(" · ") : "—";
   }
 
   function fillMonthOptions(referenceMonth) {
@@ -351,10 +364,9 @@
       ["Нараховано", formatAmounts(totals.paid_amounts)],
     ].map(([label, value]) => `<article><small>${label}</small><strong>${escapeHtml(value)}</strong></article>`).join("");
     $("#analytics-rows").innerHTML = data.items.length ? data.items.map((item) => {
-      const name = item.contact_name || `Контакт ${item.contact_id}`;
-      const username = item.contact_username ? `<small>@${escapeHtml(item.contact_username)}</small>` : "";
+      const name = contactName(item);
       const categories = Object.keys(item.request_categories).length ? item.request_categories : item.categories;
-      return `<tr><td><strong>${escapeHtml(name)}</strong>${username}<small>ID ${item.contact_id}</small></td><td>${item.messages}</td><td>${item.message_directions.in || 0} / ${item.message_directions.out || 0}</td><td>${item.ordinary_requests}</td><td>${item.paid_requests}</td><td>${escapeHtml(formatAmounts(item.paid_amounts))}</td><td>${escapeHtml(formatCategories(categories))}</td><td>${item.questions_asked} / ${item.questions_closed}</td></tr>`;
+      return `<tr><td><strong>${escapeHtml(name)}</strong></td><td>${item.messages}</td><td>${item.message_directions.in || 0} / ${item.message_directions.out || 0}</td><td>${item.ordinary_requests}</td><td>${item.paid_requests}</td><td>${escapeHtml(formatAmounts(item.paid_amounts))}</td><td>${escapeHtml(formatCategories(categories))}</td><td>${item.questions_asked} / ${item.questions_closed}</td></tr>`;
     }).join("") : '<tr><td class="empty-row" colspan="8">За вибраний період контактів немає.</td></tr>';
   }
 
@@ -448,7 +460,7 @@
       const form = event.currentTarget;
       const enableRetention = form.elements.message_retention_enabled.checked;
       if (enableRetention && !state.bootstrap.summary.message_retention_enabled) {
-        const accepted = window.confirm("Увімкнути зашифроване зберігання текстів повідомлень на строк до 48 годин для формування добового самарі?");
+        const accepted = window.confirm("Увімкнути зашифроване зберігання текстів повідомлень на строк до 48 годин для формування добового підсумку?");
         if (!accepted) {
           form.elements.message_retention_enabled.checked = false;
           toast("Зберігання залишилось вимкненим");
@@ -485,7 +497,7 @@
       tg?.HapticFeedback?.notificationOccurred?.("success");
     }));
     $("#disconnect-summary-channel").addEventListener("click", (event) => withBusyButton(event.currentTarget, "Відключаємо…", async () => {
-      const accepted = window.confirm("Відключити канал? Наступні самарі надходитимуть в особистий чат із ботом.");
+      const accepted = window.confirm("Відключити канал? Наступні підсумки надходитимуть в особистий чат із ботом.");
       if (!accepted) return;
       state.bootstrap.summary = await api("/api/v1/summary/channel", { method: "DELETE" });
       fillSummary();

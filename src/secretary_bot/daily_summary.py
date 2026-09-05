@@ -11,6 +11,7 @@ from sqlalchemy import delete, select
 
 from secretary_bot import models
 from secretary_bot.classifier import ClassifierSettings
+from secretary_bot.identities import contact_label
 from secretary_bot.retention import MessageCipher
 from secretary_bot.storage import (
     ConnectionRecord,
@@ -272,9 +273,7 @@ class DailySummary:
             )
             summarized_contacts = set(
                 await session.scalars(
-                    select(models.SummaryItem.contact_id).where(
-                        models.SummaryItem.run_id == run.id
-                    )
+                    select(models.SummaryItem.contact_id).where(models.SummaryItem.run_id == run.id)
                 )
             )
             await mark_morning_delivered(
@@ -330,7 +329,7 @@ def render_summary_header(
     normal_requests = sum(item.normal_request_count for item in items)
     paid_requests = sum(item.paid_request_count for item in items)
     return (
-        f"📋 Добове самарі · {local_end:%d.%m.%Y}\n"
+        f"📋 Добовий підсумок · {local_end:%d.%m.%Y}\n"
         f"Діалогів: {len(items)}\n"
         f"Питань: {asked} задано · {closed} закрито\n"
         f"Звернень поза графіком: {normal_requests} звичайних · {paid_requests} платних\n"
@@ -339,7 +338,7 @@ def render_summary_header(
 
 
 def render_summary_item(item: models.SummaryItem) -> str:
-    who = item.contact_name or f"ID {item.contact_id}"
+    who = contact_label(item.contact_name, item.contact_username)
     priority = "💸 Обіцяли відповісти вранці\n" if item.money_priority else ""
     agreements = "\n".join(f"• {text}" for text in item.agreements_json) or "• немає"
     questions = "\n".join(f"• {text}" for text in item.open_questions_json) or "• немає"
@@ -356,11 +355,7 @@ def render_summary_item(item: models.SummaryItem) -> str:
 def summary_header_keyboard(run_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="👁 Прочитати все", callback_data=f"summary:read:{run_id}"
-                )
-            ]
+            [InlineKeyboardButton(text="👁 Прочитати все", callback_data=f"summary:read:{run_id}")]
         ]
     )
 
@@ -381,7 +376,12 @@ def summary_item_keyboard(
     )
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Resolve", callback_data=f"summary:resolve:{item_id}")],
+            [
+                InlineKeyboardButton(
+                    text="✅ Позначити вирішеним",
+                    callback_data=f"summary:resolve:{item_id}",
+                )
+            ],
             [open_button],
             [
                 InlineKeyboardButton(

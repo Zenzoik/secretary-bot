@@ -79,11 +79,17 @@ async def test_invite_is_one_time_pending_until_master_approval(session: AsyncSe
     assert len(invite.token_hash) == 32
 
     pending = await consume_access_invite(
-        session, token=token, user_id=99, username="customer", now=NOW
+        session,
+        token=token,
+        user_id=99,
+        username="customer",
+        display_name="Customer Name",
+        now=NOW,
     )
 
     assert pending is not None
     assert pending.status == "pending"
+    assert pending.display_name == "Customer Name"
     assert pending.onboarding_state == "awaiting_connection"
     assert not pending.can_connect
     assert (

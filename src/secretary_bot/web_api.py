@@ -22,6 +22,7 @@ from secretary_bot.classifier import (
     MONEY_KEYWORDS,
 )
 from secretary_bot.config import Settings
+from secretary_bot.identities import contact_label
 from secretary_bot.storage import Database, purge_retained_messages, set_delivery_preferences
 from secretary_bot.summary_channel import SummaryChannelConnector, SummaryChannelError
 from secretary_bot.templates import DEFAULT_TEMPLATES, TemplateCode
@@ -168,7 +169,7 @@ class SummaryPayload(BaseModel):
     @classmethod
     def validate_channel_id(cls, value: int | None) -> int | None:
         if value == 0:
-            raise ValueError("ID каналу не може дорівнювати нулю")
+            raise ValueError("Оберіть канал у Telegram")
         return value
 
 
@@ -270,9 +271,7 @@ def build_web_router(
             return _delivery(principal.connection)
 
     @router.put("/api/v1/escalation")
-    async def update_escalation(
-        request: Request, payload: EscalationPayload
-    ) -> dict[str, Any]:
+    async def update_escalation(request: Request, payload: EscalationPayload) -> dict[str, Any]:
         async with database.session() as session, session.begin():
             principal = await api.authorize(session, request)
             connection = principal.connection
@@ -581,9 +580,7 @@ def build_web_router(
             content=payload,
             media_type="application/pdf",
             headers={
-                "Content-Disposition": (
-                    f'attachment; filename="personal-secretary-{month}.pdf"'
-                )
+                "Content-Disposition": (f'attachment; filename="personal-secretary-{month}.pdf"')
             },
         )
 
@@ -827,7 +824,8 @@ async def _contacts(
         rows = [
             row
             for row in rows
-            if needle in (row.contact_name or "").casefold() or needle in str(row.contact_id)
+            if needle in (row.contact_name or "").casefold()
+            or needle.lstrip("@") in (row.contact_username or "").casefold()
         ]
     return [await _contact(session, connection_id, row.contact_id) for row in rows]
 
@@ -863,6 +861,8 @@ async def _contact(session: AsyncSession, connection_id: int, contact_id: int) -
     return {
         "contact_id": contact_id,
         "contact_name": activity.contact_name,
+        "contact_username": activity.contact_username,
+        "contact_label": contact_label(activity.contact_name, activity.contact_username),
         "last_incoming_at": _iso(activity.last_incoming_at),
         "last_auto_reply_at": _iso(activity.last_auto_reply_at),
         "auto_reply_count": replies or 0,
@@ -931,22 +931,37 @@ async def _logs(
     contact_id: int | None,
     action: str | None,
 ) -> list[dict[str, Any]]:
-    query = select(models.MessageLog).where(
-        models.MessageLog.connection_id == connection_id,
-        models.MessageLog.occurred_at >= datetime.now(UTC) - LOG_RETENTION,
-        models.MessageLog.action != LogAction.CAPTURED.value,
+    query = (
+        select(
+            models.MessageLog,
+            models.ContactActivity.contact_name,
+            models.ContactActivity.contact_username,
+        )
+        .outerjoin(
+            models.ContactActivity,
+            (models.ContactActivity.connection_id == models.MessageLog.connection_id)
+            & (models.ContactActivity.contact_id == models.MessageLog.contact_id),
+        )
+        .where(
+            models.MessageLog.connection_id == connection_id,
+            models.MessageLog.occurred_at >= datetime.now(UTC) - LOG_RETENTION,
+            models.MessageLog.action != LogAction.CAPTURED.value,
+        )
     )
     if contact_id is not None:
         query = query.where(models.MessageLog.contact_id == contact_id)
     if action is not None:
         query = query.where(models.MessageLog.action == action)
-    rows = await session.scalars(
-        query.order_by(models.MessageLog.occurred_at.desc()).limit(MAX_LOGS)
-    )
+    rows = (
+        await session.execute(query.order_by(models.MessageLog.occurred_at.desc()).limit(MAX_LOGS))
+    ).all()
     return [
         {
             "id": row.id,
             "contact_id": row.contact_id,
+            "contact_name": contact_name,
+            "contact_username": contact_username,
+            "contact_label": contact_label(contact_name, contact_username),
             "occurred_at": _iso(row.occurred_at),
             "direction": row.direction,
             "action": row.action,
@@ -955,7 +970,7 @@ async def _logs(
             "template_code": row.template_code,
             "error_code": row.error_code,
         }
-        for row in rows
+        for row, contact_name, contact_username in rows
     ]
 
 

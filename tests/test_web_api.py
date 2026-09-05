@@ -423,9 +423,7 @@ async def test_paid_escalation_requires_positive_price_when_enabled(database: Da
         "decline_text": "Відмовлено",
     }
     async with AsyncClient(transport=transport, base_url="https://testserver") as client:
-        response = await client.put(
-            "/api/v1/escalation", headers=headers(), json=payload
-        )
+        response = await client.put("/api/v1/escalation", headers=headers(), json=payload)
 
     assert response.status_code == 422
 
@@ -493,7 +491,14 @@ async def test_contacts_support_exclusions_personal_windows_and_owner_isolation(
     first_id = await seed_owner(database)
     second_id = await seed_owner(database, user_id=99, name="Other")
     async with database.session() as session, session.begin():
-        await record_incoming(session, first_id, 100, at=NOW, contact_name="Test Contact")
+        await record_incoming(
+            session,
+            first_id,
+            100,
+            at=NOW,
+            contact_name=".",
+            contact_username="test_contact",
+        )
         await record_incoming(session, second_id, 100, at=NOW, contact_name="Foreign Contact")
 
     transport = ASGITransport(app=web_app(database))
@@ -514,11 +519,11 @@ async def test_contacts_support_exclusions_personal_windows_and_owner_isolation(
                 ],
             },
         )
-        contacts = await client.get("/api/v1/contacts?search=Test", headers=headers())
+        contacts = await client.get("/api/v1/contacts?search=@test_contact", headers=headers())
 
     assert saved.status_code == 200
-    assert saved.json()["contact_name"] == "Test Contact"
-    assert contacts.json()["items"][0]["contact_name"] == "Test Contact"
+    assert saved.json()["contact_label"] == "@test_contact"
+    assert contacts.json()["items"][0]["contact_label"] == "@test_contact"
     assert "Foreign Contact" not in contacts.text
     async with database.session() as session:
         connection = await load_owner_connection(session, 42)
@@ -537,6 +542,14 @@ async def test_log_is_limited_to_30_days_and_filters_without_message_bodies(
 ) -> None:
     connection_id = await seed_owner(database)
     async with database.session() as session, session.begin():
+        await record_incoming(
+            session,
+            connection_id,
+            100,
+            at=NOW,
+            contact_name=".",
+            contact_username="journal_contact",
+        )
         await log_decision(
             session,
             connection_id=connection_id,
@@ -572,6 +585,7 @@ async def test_log_is_limited_to_30_days_and_filters_without_message_bodies(
     assert response.status_code == 200
     assert len(response.json()["items"]) == 1
     assert response.json()["items"][0]["contact_id"] == 100
+    assert response.json()["items"][0]["contact_label"] == "@journal_contact"
     assert "body" not in response.text
     assert [item["action"] for item in unfiltered.json()["items"]] == ["replied"]
     assert captured.status_code == 422

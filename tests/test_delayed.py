@@ -84,6 +84,7 @@ def test_task_round_trips_without_the_message_body() -> None:
         "confidence",
         "window_key",
         "contact_name",
+        "contact_username",
         "delivery_attempts",
         "request_id",
     }

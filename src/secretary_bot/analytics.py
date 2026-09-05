@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from secretary_bot import models
 from secretary_bot.actions import LogAction
+from secretary_bot.identities import contact_label
 
 MAX_ANALYTICS_DAYS = 366
 
@@ -89,9 +90,7 @@ async def build_analytics(
         item = contacts.setdefault(contact_id, _empty_contact(contact_id))
         value = int(count)
         item["messages"] += value
-        item["message_directions"][direction] = (
-            item["message_directions"].get(direction, 0) + value
-        )
+        item["message_directions"][direction] = item["message_directions"].get(direction, 0) + value
         category_key = category or "unknown"
         item["categories"][category_key] = item["categories"].get(category_key, 0) + value
         item["actions"][action] = item["actions"].get(action, 0) + value
@@ -292,9 +291,7 @@ def render_monthly_pdf(report: dict[str, Any], *, generated_at: datetime | None 
         ]
     ]
     for item in report["items"]:
-        contact = item["contact_name"] or f"ID {item['contact_id']}"
-        if item["contact_username"]:
-            contact += f"\n@{item['contact_username']}"
+        contact = contact_label(item["contact_name"], item["contact_username"])
         categories = _format_categories(item["request_categories"] or item["categories"])
         amounts = _format_amounts(item["paid_amounts"])
         rows.append(
@@ -411,12 +408,7 @@ def _p(text: str, style: ParagraphStyle) -> Paragraph:
 
 
 def _escape(value: Any) -> str:
-    return (
-        str(value)
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-    )
+    return str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _format_date(value: str) -> str:

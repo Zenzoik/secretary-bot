@@ -19,6 +19,7 @@ from aiogram.types import (
 from secretary_bot import texts as ui
 from secretary_bot.callbacks import finalize_callback
 from secretary_bot.delayed import DelayedReplyQueue
+from secretary_bot.identities import user_label
 from secretary_bot.storage import (
     AccessUserRecord,
     ConnectionRecord,
@@ -44,6 +45,7 @@ from secretary_bot.storage import (
     set_onboarding_state,
     set_owner_schedule,
     set_owner_timezone,
+    sync_access_identity,
 )
 from secretary_bot.templates import DEFAULT_TEMPLATES, TemplateCode
 
@@ -120,6 +122,7 @@ class ControlPlane:
                     user_id=sender.id,
                     username=sender.username,
                     now=moment,
+                    display_name=sender.full_name,
                 )
                 if pending is None:
                     response = ControlResponse(ui.INVITE_INVALID)
@@ -135,6 +138,13 @@ class ControlPlane:
                 access = await load_access_user(session, sender.id)
                 if access is None:
                     return False
+                access = await sync_access_identity(
+                    session,
+                    sender.id,
+                    username=sender.username,
+                    display_name=sender.full_name,
+                )
+                assert access is not None
                 if access.status == "pending":
                     response = ControlResponse(ui.ACCESS_PENDING)
                     connection = None
@@ -213,6 +223,13 @@ class ControlPlane:
 
         async with self.database.session() as session, session.begin():
             access = await load_access_user(session, sender.id)
+            if access is not None:
+                access = await sync_access_identity(
+                    session,
+                    sender.id,
+                    username=sender.username,
+                    display_name=sender.full_name,
+                )
             if access_action is not None:
                 if access is None or not access.is_master:
                     return False
@@ -837,7 +854,7 @@ def _access_users_keyboard(users: list[AccessUserRecord]) -> InlineKeyboardMarku
     for user in users:
         if user.role == "master" or user.status == "revoked":
             continue
-        identity = f"@{user.username}" if user.username else str(user.user_id)
+        identity = user_label(user.display_name, user.username)
         if user.status == "pending":
             rows.append(
                 [

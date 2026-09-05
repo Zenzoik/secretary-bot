@@ -4,16 +4,18 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from secretary_bot.identities import contact_label, user_label
+
 BUTTON_STATUS = "📊 Статус"
 BUTTON_TODAY = "🗓 Сьогодні"
 BUTTON_OFF = "⛔ Вимкнути"
 BUTTON_ON = "▶️ Увімкнути"
 BUTTON_MUTE = "⏸ Пауза"
-BUTTON_LIVE = "⚠️ Увімкнути live"
-BUTTON_LIVE_ACTIVE = "🔴 Live увімкнено"
+BUTTON_LIVE = "⚠️ Увімкнути відповіді клієнтам"
+BUTTON_LIVE_ACTIVE = "🔴 Відповіді клієнтам увімкнено"
 BUTTON_SEND_BOT = "🤖 Відправити від бота"
 BUTTON_BACK = "↩️ Назад"
-BUTTON_LIVE_CONFIRM = "⚠️ Підтверджую live"
+BUTTON_LIVE_CONFIRM = "⚠️ Так, відповідати клієнтам"
 BUTTON_CANCEL = "Скасувати"
 BUTTON_USERS = "👥 Користувачі"
 BUTTON_INVITE = "➕ Запросити"
@@ -55,23 +57,27 @@ ONBOARDING_BACK_SCHEDULE = "Повернулися до вибору розкл�
 ONBOARDING_SCOPE_CONFIRM = "Підтвердьте Only Selected Chats лише після налаштування в Telegram."
 ONBOARDING_CONNECTION_CHANGED = "Права або підключення змінилися. Перевірте Chat Automation ще раз."
 ONBOARDING_DONE = (
-    "✅ Налаштування завершено. Режим dry-run; live доступний лише після ручного підтвердження."
+    "✅ Налаштування завершено. Зараз бот лише показує чернетки відповідей. "
+    "Відповіді клієнтам вмикаються окремо."
 )
 ONBOARDING_ALREADY_DONE = "Налаштування вже завершено."
-PANEL_OPEN = "Панель керування відкрита. Для картки контакту використовуйте Manage Bot."
+PANEL_OPEN = (
+    "Панель керування відкрита. Картку контакту можна відкрити кнопкою керування ботом "
+    "у відповідному чаті."
+)
 FORBIDDEN = "Недостатньо прав."
 MUTE_SELECT = "Виберіть тривалість паузи кнопкою."
-LIVE_SELECT = "Підтвердьте live або скасуйте перехід кнопкою."
+LIVE_SELECT = "Підтвердьте ввімкнення відповідей клієнтам або скасуйте дію."
 MAIN_MENU = "Головне меню."
 SECRETARY_OFF = "⛔ Секретаря вимкнено. Уже заплановані відповіді також зупинено."
 SECRETARY_ON = "✅ Секретаря увімкнено. Тимчасову паузу знято."
 MUTE_QUESTION = "На скільки годин поставити паузу?"
-LIVE_ALREADY = "Live-режим уже увімкнено."
-LIVE_PROMPT = "⚠️ Увімкнути live? Після підтвердження бот зможе відповідати контактам."
-LIVE_ENABLED = "⚠️ Live-режим увімкнено. Бот може відповідати контактам."
+LIVE_ALREADY = "Відповіді клієнтам уже увімкнено."
+LIVE_PROMPT = "⚠️ Дозволити боту надсилати відповіді клієнтам?"
+LIVE_ENABLED = "⚠️ Відповіді клієнтам увімкнено."
 LIVE_EXPIRED = "Підтвердження протерміновано. Режим не змінено."
-LIVE_EXPIRED_RETRY = "Підтвердження протерміновано. Повторіть увімкнення live."
-DRY_RUN_SAVED = "Dry-run збережено. Live-режим не увімкнено."
+LIVE_EXPIRED_RETRY = "Підтвердження протерміновано. Повторіть увімкнення відповідей клієнтам."
+DRY_RUN_SAVED = "Бот і надалі лише показуватиме чернетки відповідей."
 CONTACT_EXCLUDED = "🚫 Контакт виключено назавжди."
 CONTACT_TEMPLATE_PROMPT = "Виберіть шаблон для цього контакту:"
 USER_APPROVED = "✅ Користувача підтверджено. Йому надіслано інструкцію підключення."
@@ -98,7 +104,7 @@ PLACEHOLDER_SCHEDULE = "Виберіть розклад"
 PLACEHOLDER_SCOPE = "Підтвердьте область чатів"
 PLACEHOLDER_MAIN = "Керування секретарем"
 PLACEHOLDER_MUTE = "Виберіть тривалість паузи"
-PLACEHOLDER_LIVE = "Підтвердьте або скасуйте live"
+PLACEHOLDER_LIVE = "Підтвердьте або скасуйте відповіді клієнтам"
 
 DIRECT_REPLY_SELECT = "Оберіть контакт, якому потрібно написати від бота:"
 DIRECT_REPLY_NO_CONTACTS = "Поки немає контактів, яким бот може написати."
@@ -123,9 +129,7 @@ MONEY_PRIORITY_TEMPLATE = (
 )
 BOT_IDENTITY_SUFFIX = "— 🤖 Секретар"
 
-ESCALATION_OFFER_TEMPLATE = (
-    "Якщо відповідь потрібна терміново, можна створити платне звернення."
-)
+ESCALATION_OFFER_TEMPLATE = "Якщо відповідь потрібна терміново, можна створити платне звернення."
 ESCALATION_CONFIRM_TEMPLATE = (
     "Платне звернення підтверджено. Зв’язок не гарантовано, але звернення "
     "буде враховано в рахунку наприкінці місяця."
@@ -182,7 +186,11 @@ def contact_excluded_until(until: datetime) -> str:
 
 
 def contact_template_selected(code: str) -> str:
-    return f"✏️ Для контакту вибрано шаблон: {code}."
+    labels = {
+        "off_hours_default": "звичайна відповідь",
+        "money_priority": "питання про оплату",
+    }
+    return f"✏️ Для контакту вибрано шаблон «{labels.get(code, 'власний')}»."
 
 
 def callback_feedback(
@@ -198,9 +206,9 @@ def callback_feedback(
             else ("✅ Оброблено: доступ відкликано", "Доступ відкликано")
         )
     if live_action == "confirm":
-        return "✅ Оброблено: live увімкнено", "Live увімкнено"
+        return "✅ Оброблено: відповіді клієнтам увімкнено", "Відповіді увімкнено"
     if live_action == "cancel":
-        return "✅ Оброблено: dry-run збережено", "Скасовано"
+        return "✅ Оброблено: залишено режим чернеток", "Скасовано"
     assert contact is not None
     _, action, argument = contact
     if action == "exclude":
@@ -210,7 +218,11 @@ def callback_feedback(
     if action == "templates":
         return "✅ Оброблено: вибір персонального шаблону", "Виберіть шаблон"
     if action == "template":
-        return f"✅ Оброблено: вибрано шаблон {argument}", "Шаблон вибрано"
+        labels = {
+            "off_hours_default": "звичайної відповіді",
+            "money_priority": "питань про оплату",
+        }
+        return f"✅ Оброблено: вибрано шаблон {labels.get(argument, 'відповіді')}", "Шаблон вибрано"
     return "✅ Оброблено: без змін", "Без змін"
 
 
@@ -223,7 +235,7 @@ def render_status(connection: Any, *, now: datetime) -> str:
         state, pause = "пауза", f"до {local_until:%d.%m %H:%M}"
     else:
         state, pause = "увімкнено", "немає"
-    mode = "dry-run" if connection.dry_run else "live"
+    mode = "лише чернетки" if connection.dry_run else "відповіді клієнтам"
     return (
         f"🤖 Секретар: {state}\n"
         f"Режим: {mode}\n"
@@ -236,8 +248,23 @@ def render_today(counts: list[tuple[str, str | None, int]], *, local_date: str) 
     if not counts:
         return f"📊 {local_date}: дій поки немає."
     lines = [f"📊 {local_date}:"]
+    action_labels = {
+        "replied": "надіслано відповідей",
+        "dry_run": "показано чернеток",
+        "skipped_schedule": "пропущено в робочий час",
+        "skipped_excluded": "пропущено за правилом контакту",
+        "skipped_owner_replied": "власник відповів сам",
+        "skipped_window_limit": "досягнуто ліміт відповідей",
+        "skipped_kill_switch": "секретаря вимкнено",
+        "skipped_inactive": "підключення неактивне",
+        "skipped_unsupported_content": "непідтримуваний тип повідомлення",
+        "error": "помилки",
+    }
+    category_labels = {"general": "звичайні", "money": "про оплату"}
     for action, category, count in counts:
-        label = action if category is None else f"{action}/{category}"
+        label = action_labels.get(action, action)
+        if category is not None:
+            label += f" · {category_labels.get(category, category)}"
         lines.append(f"• {label}: {count}")
     return "\n".join(lines)
 
@@ -246,16 +273,27 @@ def render_access_users(users: list[Any]) -> str:
     lines = ["👥 Користувачі:"]
     labels = {"pending": "очікує", "active": "активний", "revoked": "відкликаний"}
     for user in users:
-        identity = f"@{user.username}" if user.username else f"ID {user.user_id}"
+        identity = user_label(
+            user.display_name,
+            user.username,
+            fallback="Майстер" if user.role == "master" else "Користувач без імені",
+        )
         role = "майстер" if user.role == "master" else labels[user.status]
-        state = "" if user.role == "master" else f" · {user.onboarding_state}"
+        onboarding = {
+            "awaiting_connection": "очікує підключення",
+            "timezone": "налаштовує часовий пояс",
+            "schedule": "налаштовує розклад",
+            "scope": "обирає доступні чати",
+            "ready": "готовий",
+        }
+        state = "" if user.role == "master" else f" · {onboarding.get(user.onboarding_state, '')}"
         lines.append(f"• {identity} — {role}{state}")
     return "\n".join(lines)
 
 
 def render_contact_card(card: Any, *, timezone: str) -> str:
     zone = ZoneInfo(timezone)
-    name = card.contact_name or f"Контакт {card.contact_id}"
+    name = contact_label(card.contact_name, card.contact_username)
     last = (
         "немає"
         if card.last_auto_reply_at is None
@@ -267,7 +305,10 @@ def render_contact_card(card: Any, *, timezone: str) -> str:
         exclusion = f"до {card.exclusion_until.astimezone(zone):%d.%m %H:%M}"
     else:
         exclusion = "немає"
-    forced = card.forced_template_code or "автоматично"
+    forced = {
+        "off_hours_default": "звичайна відповідь",
+        "money_priority": "питання про оплату",
+    }.get(card.forced_template_code, "автоматичний вибір")
     return (
         f"👤 {name}\n"
         f"Автовідповідей за 30 днів: {card.auto_reply_count}\n"
@@ -282,12 +323,17 @@ def render_preview(
     occurred_at: datetime,
     contact_id: int,
     contact_name: str | None,
+    contact_username: str | None,
     category: str,
     confidence: str | None,
     reply_text: str,
 ) -> str:
-    who = contact_name or f"id {contact_id}"
-    shown_category = category if confidence is None else f"{category} ({confidence})"
+    del contact_id
+    who = contact_label(contact_name, contact_username)
+    category_name = {"general": "звичайне звернення", "money": "питання про оплату"}.get(
+        category, category
+    )
+    shown_category = category_name if confidence is None else f"{category_name} ({confidence})"
     return (
         f"🌙 {occurred_at:%H:%M} · {who}\nКатегорія: {shown_category}\nЯ б відповів: «{reply_text}»"
     )
@@ -297,7 +343,7 @@ def render_morning_digest(rows: list[Any], *, timezone: str) -> str:
     zone = ZoneInfo(timezone)
     lines = ["☀️ Уранці обіцяли відповісти:"]
     for row in rows:
-        who = row.contact_name or f"id {row.contact_id}"
+        who = contact_label(row.contact_name, getattr(row, "contact_username", None))
         detail = row.summary or "питання про гроші"
         lines.append(f"• {row.occurred_at.astimezone(zone):%H:%M} · {who} — {detail}")
     return "\n".join(lines)

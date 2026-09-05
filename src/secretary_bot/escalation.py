@@ -10,6 +10,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from sqlalchemy import update
 
 from secretary_bot import models
+from secretary_bot.identities import contact_label
 from secretary_bot.sender import BusinessReplySender
 from secretary_bot.storage import Database, load_owner_connection, normalize_contact_username
 from secretary_bot.texts import as_bot_reply
@@ -92,9 +93,7 @@ class EscalationActions:
     bot: EscalationBot
     sender: BusinessReplySender
 
-    async def handle_callback(
-        self, query: CallbackQuery, *, now: datetime | None = None
-    ) -> bool:
+    async def handle_callback(self, query: CallbackQuery, *, now: datetime | None = None) -> bool:
         parsed = parse_escalation_callback(query.data)
         if parsed is None:
             return False
@@ -119,9 +118,7 @@ class EscalationActions:
             if connection is None:
                 return False
             if not connection.escalation_enabled or connection.escalation_price_amount <= 0:
-                await self._answer(
-                    query, "Платні термінові звернення зараз вимкнені.", alert=True
-                )
+                await self._answer(query, "Платні термінові звернення зараз вимкнені.", alert=True)
                 return True
             if request.status == "paid":
                 await self._answer(query, "Це звернення вже підтверджено як платне.")
@@ -175,9 +172,7 @@ class EscalationActions:
         await self._answer(query, "Перевірте вартість і підтвердьте звернення.")
         return True
 
-    async def _confirm(
-        self, query: CallbackQuery, *, request_id: int, now: datetime
-    ) -> bool:
+    async def _confirm(self, query: CallbackQuery, *, request_id: int, now: datetime) -> bool:
         async with self.database.session() as session, session.begin():
             request = await session.get(models.ContactRequest, request_id)
             if request is None or request.contact_id != query.from_user.id:
@@ -189,9 +184,7 @@ class EscalationActions:
                 await self._answer(query, "Платне звернення вже підтверджено.")
                 return True
             if not connection.escalation_enabled:
-                await self._answer(
-                    query, "Платні термінові звернення вже вимкнені.", alert=True
-                )
+                await self._answer(query, "Платні термінові звернення вже вимкнені.", alert=True)
                 await self._clear_keyboard(query, connection.business_connection_id)
                 return True
             if request.offer_expires_at <= now:
@@ -223,9 +216,7 @@ class EscalationActions:
                     models.ContactActivity.connection_id == request.connection_id,
                     models.ContactActivity.contact_id == request.contact_id,
                 )
-                .values(
-                    paid_escalation_count=models.ContactActivity.paid_escalation_count + 1
-                )
+                .values(paid_escalation_count=models.ContactActivity.paid_escalation_count + 1)
             )
             activity = await session.get(
                 models.ContactActivity, (request.connection_id, request.contact_id)
@@ -251,7 +242,7 @@ class EscalationActions:
             text=as_bot_reply(confirm_text),
         )
         if owner_chat_id is not None:
-            who = contact_name or f"ID {contact_id}"
+            who = contact_label(contact_name, contact_username)
             sent = await self.bot.send_message(
                 chat_id=owner_chat_id,
                 text=(
@@ -288,9 +279,7 @@ class EscalationActions:
         await self._answer(query, "Платне звернення не створено.")
         return True
 
-    async def _decline(
-        self, query: CallbackQuery, *, request_id: int, now: datetime
-    ) -> bool:
+    async def _decline(self, query: CallbackQuery, *, request_id: int, now: datetime) -> bool:
         async with self.database.session() as session, session.begin():
             connection = await load_owner_connection(session, query.from_user.id)
             request = await session.get(models.ContactRequest, request_id)
@@ -359,16 +348,12 @@ class EscalationActions:
                 await self.bot.edit_message_reply_markup(
                     chat_id=query.message.chat.id,
                     message_id=query.message.message_id,
-                    reply_markup=escalation_owner_keyboard(
-                        request_id, contact_username=username
-                    ),
+                    reply_markup=escalation_owner_keyboard(request_id, contact_username=username),
                 )
         await self._answer(query, "Посилання оновлено. Натисніть кнопку ще раз.")
         return True
 
-    async def _clear_keyboard(
-        self, query: CallbackQuery, business_connection_id: str
-    ) -> None:
+    async def _clear_keyboard(self, query: CallbackQuery, business_connection_id: str) -> None:
         if query.message is None:
             return
         with contextlib.suppress(Exception):

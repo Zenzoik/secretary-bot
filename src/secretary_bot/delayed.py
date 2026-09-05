@@ -43,6 +43,7 @@ class ReplyTask:
     confidence: str | None = None
     window_key: str | None = None
     contact_name: str | None = None
+    contact_username: str | None = None
     request_id: int | None = None
     delivery_attempts: int = 0
 
@@ -58,6 +59,7 @@ class ReplyTask:
         values = json.loads(payload)
         # Tasks created before Stage 1.7 were always sent as the owner.
         values.setdefault("sender_identity", "owner")
+        values.setdefault("contact_username", None)
         values.setdefault("request_id", None)
         values.setdefault("delivery_attempts", 0)
         return cls(**values)

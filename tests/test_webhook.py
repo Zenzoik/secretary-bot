@@ -245,7 +245,7 @@ def test_settings_app_and_assets_are_served_without_exposing_secrets(world) -> N
     assert "Мінімум власника, с" in page.text
     assert "Спільний максимум, с" in page.text
     assert "Мін. затримка власника, с" not in page.text
-    assert "Зберігати тексти для самарі" in page.text
+    assert "Зберігати тексти для підсумку" in page.text
     assert "48 годин" in page.text
     assert 'content="http://testserver/assets/og.png"' in page.text
     assert SECRET not in page.text + stylesheet.text + script.text
