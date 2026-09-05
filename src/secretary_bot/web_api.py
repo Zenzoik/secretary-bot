@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import secrets
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
@@ -9,7 +11,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from secretary_bot import models
@@ -20,12 +22,26 @@ from secretary_bot.classifier import (
     DEFAULT_MODEL,
     DEFAULT_SYSTEM_PROMPT,
     MONEY_KEYWORDS,
+    classify,
 )
 from secretary_bot.config import Settings
+from secretary_bot.gate import ContactState, evaluate_gate
 from secretary_bot.identities import contact_label
-from secretary_bot.storage import Database, purge_retained_messages, set_delivery_preferences
+from secretary_bot.outbox import retry_failed_notifications
+from secretary_bot.status import operating_status
+from secretary_bot.storage import (
+    Database,
+    load_classifier_settings,
+    load_connection,
+    load_contact_state,
+    load_forced_template_code,
+    load_templates,
+    purge_retained_messages,
+    set_delivery_preferences,
+)
 from secretary_bot.summary_channel import SummaryChannelConnector, SummaryChannelError
-from secretary_bot.templates import DEFAULT_TEMPLATES, TemplateCode
+from secretary_bot.templates import DEFAULT_TEMPLATES, TemplateCode, render, template_for
+from secretary_bot.texts import as_bot_reply
 from secretary_bot.web_auth import (
     EXCHANGE_TTL,
     SESSION_COOKIE,
@@ -38,7 +54,6 @@ from secretary_bot.web_auth import (
 )
 
 MAX_WINDOWS = 16
-MAX_CONTACTS = 500
 MAX_LOGS = 200
 LOG_RETENTION = timedelta(days=30)
 
@@ -189,9 +204,22 @@ class ContactPayload(BaseModel):
         if self.exclusion == "until":
             if self.exclusion_until is None or self.exclusion_until.tzinfo is None:
                 raise ValueError("Вкажіть дату завершення з часовим поясом")
+            if self.exclusion_until <= datetime.now(UTC):
+                raise ValueError("Дата завершення має бути в майбутньому")
         elif self.exclusion_until is not None:
             raise ValueError("Дата потрібна лише для тимчасового виключення")
         return self
+
+
+class PreviewPayload(BaseModel):
+    text: Annotated[str, Field(min_length=1, max_length=2000)]
+    contact_id: int | None = None
+
+
+class ControlPayload(BaseModel):
+    action: Literal["pause", "resume", "stop", "dry_run", "live"]
+    hours: Annotated[int, Field(ge=1, le=24)] = 1
+    confirmed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,6 +281,88 @@ def build_web_router(
             principal = await api.authorize(session, request)
             return await _bootstrap(session, principal)
 
+    @router.post("/api/v1/control")
+    async def control(request: Request, payload: ControlPayload) -> dict[str, Any]:
+        async with database.session() as session, session.begin():
+            principal = await api.authorize(session, request)
+            row = principal.connection
+            if payload.action == "live":
+                if not payload.confirmed:
+                    raise HTTPException(status_code=422, detail="Підтвердіть відповіді клієнтам")
+                if not row.is_active or not (row.rights_json or {}).get("can_reply"):
+                    raise HTTPException(status_code=409, detail="Перевірте підключення та права")
+                row.dry_run = False
+            elif payload.action == "dry_run":
+                row.dry_run = True
+                row.live_confirmation_until = None
+                row.control_state = "main"
+            elif payload.action == "pause":
+                row.muted_until = datetime.now(UTC) + timedelta(hours=payload.hours)
+            elif payload.action == "stop":
+                row.kill_switch = True
+                row.muted_until = None
+            else:
+                row.kill_switch = False
+                row.muted_until = None
+            # Pending replies are not dropped here: the worker re-checks pause,
+            # kill switch and dry-run at delivery time and logs the outcome.
+            await session.flush()
+            return await _bootstrap(session, principal)
+
+    @router.post("/api/v1/notifications/retry")
+    async def retry_notifications(request: Request) -> dict[str, Any]:
+        async with database.session() as session, session.begin():
+            principal = await api.authorize(session, request)
+            await retry_failed_notifications(
+                session, connection_id=principal.connection.id, now=datetime.now(UTC)
+            )
+            return await _bootstrap(session, principal)
+
+    @router.post("/api/v1/preview")
+    async def preview(request: Request, payload: PreviewPayload) -> dict[str, Any]:
+        """Dry evaluation of the saved rules, mirroring the pipeline's own checks."""
+        async with database.session() as session, session.begin():
+            principal = await api.authorize(session, request)
+            connection = await load_connection(session, principal.connection.business_connection_id)
+            assert connection is not None
+            contact = (
+                await load_contact_state(session, connection.id, payload.contact_id)
+                if payload.contact_id is not None
+                else ContactState()
+            )
+            if not connection.policy.is_active or not connection.rights.get("can_reply", False):
+                # The pipeline refuses before the gate when the bot may not reply.
+                decision_code = LogAction.SKIPPED_INACTIVE.value
+            else:
+                decision_code = evaluate_gate(
+                    connection.policy, contact, now=datetime.now(UTC)
+                ).decision.value
+            forced_template = (
+                await load_forced_template_code(session, connection.id, payload.contact_id)
+                if payload.contact_id is not None
+                else None
+            )
+            classifier_settings = await load_classifier_settings(session, connection.id)
+            templates = await load_templates(session, connection.id)
+        result = await classify(payload.text, settings=classifier_settings)
+        template = (
+            TemplateCode(forced_template) if forced_template else template_for(result.category)
+        )
+        text = render(template, overrides=templates)
+        if connection.sender_identity == "bot":
+            text = as_bot_reply(text)
+        return {
+            "decision": decision_code,
+            "category": result.category.value,
+            "template_code": template.value,
+            "forced_template": forced_template is not None,
+            "text": text,
+            "dry_run": connection.dry_run,
+            "timezone": connection.policy.timezone,
+            "source": "keywords",
+            "personal_schedule": bool(contact.windows),
+        }
+
     @router.put("/api/v1/delivery")
     async def update_delivery(request: Request, payload: DeliveryPayload) -> dict[str, Any]:
         async with database.session() as session, session.begin():
@@ -313,11 +423,12 @@ def build_web_router(
     async def contacts(
         request: Request,
         search: Annotated[str, Query(max_length=100)] = "",
+        offset: Annotated[int, Query(ge=0)] = 0,
     ) -> dict[str, Any]:
         async with database.session() as session, session.begin():
             principal = await api.authorize(session, request)
-            items = await _contacts(session, principal.connection.id, search=search)
-            return {"items": items}
+            items = await _contacts(session, principal.connection.id, search=search, offset=offset)
+            return {"items": items[:100], "has_more": len(items) > 100, "next_offset": offset + 100}
 
     @router.put("/api/v1/contacts/{contact_id}")
     async def update_contact(
@@ -525,6 +636,7 @@ def build_web_router(
         request: Request,
         contact_id: Annotated[int | None, Query(gt=0)] = None,
         action: str | None = None,
+        offset: Annotated[int, Query(ge=0)] = 0,
     ) -> dict[str, Any]:
         if action is not None and action not in {
             item.value for item in LogAction if item is not LogAction.CAPTURED
@@ -532,13 +644,17 @@ def build_web_router(
             raise HTTPException(status_code=422, detail="Невідома дія")
         async with database.session() as session, session.begin():
             principal = await api.authorize(session, request)
+            items = await _logs(
+                session,
+                principal.connection.id,
+                contact_id=contact_id,
+                action=action,
+                offset=offset,
+            )
             return {
-                "items": await _logs(
-                    session,
-                    principal.connection.id,
-                    contact_id=contact_id,
-                    action=action,
-                )
+                "items": items[:MAX_LOGS],
+                "has_more": len(items) > MAX_LOGS,
+                "next_offset": offset + MAX_LOGS,
             }
 
     @router.get("/api/v1/analytics")
@@ -589,12 +705,14 @@ def build_web_router(
         _month_bounds(month)
         async with database.session() as session, session.begin():
             principal = await api.authorize(session, request)
-            token = await create_web_token(
-                session,
-                user_id=principal.user.user_id,
-                kind="exchange",
-                now=datetime.now(UTC),
-                ttl=EXCHANGE_TTL,
+            token = secrets.token_urlsafe(32)
+            session.add(
+                models.PdfToken(
+                    token_hash=hashlib.sha256(token.encode()).digest(),
+                    user_id=principal.user.user_id,
+                    month=month,
+                    expires_at=datetime.now(UTC) + EXCHANGE_TTL,
+                )
             )
         base = (settings.public_base_url or str(request.base_url)).rstrip("/")
         return {
@@ -637,26 +755,42 @@ def build_web_router(
 
     @router.get("/web/analytics/{token}/{month}")
     async def exchange_monthly_analytics(token: str, month: str) -> Response:
-        _month_bounds(month)
+        month_start, month_end = _month_bounds(month)
         async with database.session() as session, session.begin():
-            consumed = await consume_exchange(session, token=token, now=datetime.now(UTC))
-        if consumed is None:
-            raise _unauthorized()
-        _, session_token = consumed
-        response = RedirectResponse(
-            url=f"/api/v1/analytics/monthly.pdf?month={month}",
-            status_code=status.HTTP_303_SEE_OTHER,
+            user_id = await session.scalar(
+                update(models.PdfToken)
+                .where(
+                    models.PdfToken.token_hash == hashlib.sha256(token.encode()).digest(),
+                    models.PdfToken.month == month,
+                    models.PdfToken.expires_at > datetime.now(UTC),
+                    models.PdfToken.consumed_at.is_(None),
+                )
+                .values(consumed_at=datetime.now(UTC))
+                .returning(models.PdfToken.user_id)
+            )
+            user = None if user_id is None else await session.get(models.AccessUser, user_id)
+            if user is None or user.status != "active" or user.onboarding_state != "ready":
+                raise _unauthorized()
+            connection = await session.scalar(
+                select(models.Connection)
+                .where(models.Connection.owner_user_id == user_id)
+                .order_by(models.Connection.id.desc())
+                .limit(1)
+            )
+            if connection is None:
+                raise _unauthorized()
+            report = await build_analytics(
+                session, connection=connection, date_from=month_start, date_to=month_end
+            )
+        return Response(
+            content=render_monthly_pdf(report),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="personal-secretary-{month}.pdf"',
+                "Cache-Control": "no-store",
+                "Referrer-Policy": "no-referrer",
+            },
         )
-        response.set_cookie(
-            SESSION_COOKIE,
-            session_token,
-            max_age=int(timedelta(days=30).total_seconds()),
-            httponly=True,
-            secure=True,
-            samesite="lax",
-            path="/",
-        )
-        return response
 
     @router.post("/api/v1/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
     async def logout(request: Request) -> Response:
@@ -694,8 +828,10 @@ async def _bootstrap(session: AsyncSession, principal: Principal) -> dict[str, A
             "is_active": principal.connection.is_active,
             "dry_run": principal.connection.dry_run,
             "kill_switch": principal.connection.kill_switch,
+            "muted_until": _iso(principal.connection.muted_until),
             "rights": dict(principal.connection.rights_json or {}),
         },
+        "status": await operating_status(session, principal.connection),
         "delivery": _delivery(principal.connection),
         "escalation": _escalation(principal.connection),
         "schedule": await _schedule(session, principal.connection),
@@ -810,72 +946,107 @@ async def _summary(session: AsyncSession, connection: models.Connection) -> dict
 
 
 async def _contacts(
-    session: AsyncSession, connection_id: int, *, search: str
+    session: AsyncSession, connection_id: int, *, search: str, offset: int = 0
 ) -> list[dict[str, Any]]:
-    query = (
-        select(models.ContactActivity)
-        .where(models.ContactActivity.connection_id == connection_id)
-        .order_by(models.ContactActivity.last_incoming_at.desc())
-        .limit(MAX_CONTACTS)
+    query = select(models.ContactActivity).where(
+        models.ContactActivity.connection_id == connection_id
     )
-    rows = list(await session.scalars(query))
-    needle = search.strip().casefold()
+    needle = search.strip().lstrip("@")
     if needle:
-        rows = [
-            row
-            for row in rows
-            if needle in (row.contact_name or "").casefold()
-            or needle.lstrip("@") in (row.contact_username or "").casefold()
-        ]
-    return [await _contact(session, connection_id, row.contact_id) for row in rows]
+        query = query.where(
+            or_(
+                models.ContactActivity.contact_name.icontains(needle, autoescape=True),
+                models.ContactActivity.contact_username.icontains(needle, autoescape=True),
+            )
+        )
+    rows = list(
+        await session.scalars(
+            query.order_by(
+                models.ContactActivity.last_incoming_at.desc(), models.ContactActivity.contact_id
+            )
+            .offset(offset)
+            .limit(101)
+        )
+    )
+    return await _contact_rows(session, connection_id, rows)
 
 
 async def _contact(session: AsyncSession, connection_id: int, contact_id: int) -> dict[str, Any]:
     activity = await session.get(models.ContactActivity, (connection_id, contact_id))
     if activity is None:
         raise HTTPException(status_code=404, detail="Контакт не знайдено")
-    exclusion = await session.scalar(
-        select(models.Exclusion).where(
-            models.Exclusion.connection_id == connection_id,
-            models.Exclusion.contact_id == contact_id,
+    return (await _contact_rows(session, connection_id, [activity]))[0]
+
+
+async def _contact_rows(
+    session: AsyncSession, connection_id: int, rows: list
+) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    ids = [row.contact_id for row in rows]
+    now = datetime.now(UTC)
+    exclusions = {
+        row.contact_id: row
+        for row in await session.scalars(
+            select(models.Exclusion).where(
+                models.Exclusion.connection_id == connection_id,
+                models.Exclusion.contact_id.in_(ids),
+            )
         )
-    )
-    windows = await session.scalars(
+    }
+    windows: dict[int, list] = {}
+    for row in await session.scalars(
         select(models.ContactWindow)
         .where(
             models.ContactWindow.connection_id == connection_id,
-            models.ContactWindow.contact_id == contact_id,
+            models.ContactWindow.contact_id.in_(ids),
         )
         .order_by(models.ContactWindow.id)
-    )
-    replies = await session.scalar(
-        select(func.count())
-        .select_from(models.MessageLog)
-        .where(
-            models.MessageLog.connection_id == connection_id,
-            models.MessageLog.contact_id == contact_id,
-            models.MessageLog.action.in_([LogAction.REPLIED.value, LogAction.DRY_RUN.value]),
-            models.MessageLog.occurred_at >= datetime.now(UTC) - LOG_RETENTION,
+    ):
+        windows.setdefault(row.contact_id, []).append(_window(row))
+    counts: dict[tuple[int, str], int] = {}
+    for contact_id, action, count in (
+        await session.execute(
+            select(models.MessageLog.contact_id, models.MessageLog.action, func.count())
+            .where(
+                models.MessageLog.connection_id == connection_id,
+                models.MessageLog.contact_id.in_(ids),
+                models.MessageLog.action.in_(["replied", "dry_run"]),
+                models.MessageLog.occurred_at >= now - LOG_RETENTION,
+            )
+            .group_by(models.MessageLog.contact_id, models.MessageLog.action)
         )
-    )
-    return {
-        "contact_id": contact_id,
-        "contact_name": activity.contact_name,
-        "contact_username": activity.contact_username,
-        "contact_label": contact_label(activity.contact_name, activity.contact_username),
-        "last_incoming_at": _iso(activity.last_incoming_at),
-        "last_auto_reply_at": _iso(activity.last_auto_reply_at),
-        "auto_reply_count": replies or 0,
-        "off_hours_request_count": activity.off_hours_request_count,
-        "paid_escalation_count": activity.paid_escalation_count,
-        "exclusion": "none"
-        if exclusion is None
-        else "forever"
-        if exclusion.until is None
-        else "until",
-        "exclusion_until": None if exclusion is None else _iso(exclusion.until),
-        "windows": [_window(row) for row in windows],
-    }
+    ).all():
+        counts[contact_id, action] = count
+    result = []
+    for activity in rows:
+        contact_id = activity.contact_id
+        exclusion = exclusions.get(contact_id)
+        if exclusion is not None and exclusion.until is not None and exclusion.until <= now:
+            exclusion = None
+        result.append(
+            {
+                "contact_id": contact_id,
+                "contact_name": activity.contact_name,
+                "contact_username": activity.contact_username,
+                "contact_label": contact_label(activity.contact_name, activity.contact_username),
+                "last_incoming_at": _iso(activity.last_incoming_at),
+                "last_auto_reply_at": _iso(activity.last_auto_reply_at),
+                "auto_reply_count": counts.get((contact_id, "replied"), 0),
+                "preview_count": counts.get((contact_id, "dry_run"), 0),
+                "reply_period_days": 30,
+                "off_hours_request_count": activity.off_hours_request_count,
+                "paid_escalation_count": activity.paid_escalation_count,
+                "exclusion": "none"
+                if exclusion is None
+                else "forever"
+                if exclusion.until is None
+                else "until",
+                "exclusion_until": None if exclusion is None else _iso(exclusion.until),
+                "windows": windows.get(contact_id, []),
+            }
+        )
+    return result
 
 
 async def _save_contact(
@@ -930,6 +1101,7 @@ async def _logs(
     *,
     contact_id: int | None,
     action: str | None,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
     query = (
         select(
@@ -953,7 +1125,11 @@ async def _logs(
     if action is not None:
         query = query.where(models.MessageLog.action == action)
     rows = (
-        await session.execute(query.order_by(models.MessageLog.occurred_at.desc()).limit(MAX_LOGS))
+        await session.execute(
+            query.order_by(models.MessageLog.occurred_at.desc(), models.MessageLog.id.desc())
+            .offset(offset)
+            .limit(MAX_LOGS + 1)
+        )
     ).all()
     return [
         {
