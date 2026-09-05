@@ -19,6 +19,7 @@ from secretary_bot import texts as ui
 from secretary_bot.actions import LogAction
 from secretary_bot.callbacks import finalize_callback
 from secretary_bot.daily_summary import summary_item_keyboard
+from secretary_bot.delivery import send_once
 from secretary_bot.identities import contact_label
 from secretary_bot.retention import MESSAGE_RETENTION, MessageCipher, MessageContext
 from secretary_bot.sender import BusinessReplySender, SendOutcome
@@ -139,14 +140,20 @@ class SummaryActions:
         if not reply_text:
             return False
         text = as_bot_reply(reply_text)
-        result = await self.sender.send(
+        result = await send_once(
+            self.database,
+            self.sender,
+            key=f"manual:{connection.id}:{contact_id}:{replied_to}",
+            connection_id=connection.id,
             business_connection_id=connection.business_connection_id,
             chat_id=contact_id,
             text=text,
         )
         if not result.is_sent:
             failure = (
-                "⚠️ 24-годинне вікно Telegram для цього контакту закрите. "
+                "⚠️ Результат попереднього надсилання невідомий. Перевірте чат перед новою спробою."
+                if result.error_code == "DELIVERY_UNCERTAIN"
+                else "⚠️ 24-годинне вікно Telegram для цього контакту закрите. "
                 "Попросіть клієнта надіслати нове повідомлення."
                 if result.outcome is SendOutcome.CHAT_INACTIVE
                 else "⚠️ Не вдалося надіслати відповідь. Спробуйте ще раз."
@@ -168,7 +175,11 @@ class SummaryActions:
                 occurred_at=moment,
             )
             await record_owner_reply(session, connection.id, contact_id, at=moment)
-            if connection.message_retention_enabled and self.cipher is not None:
+            if (
+                connection.message_retention_enabled
+                and self.cipher is not None
+                and not result.replayed
+            ):
                 context = MessageContext(connection.id, contact_id, result.message_id, "out")
                 encrypted = self.cipher.encrypt(text, context=context)
                 await capture_message(
@@ -250,7 +261,8 @@ class SummaryActions:
             chat_id=query.from_user.id,
             text=(
                 "✍️ Напишіть відповідь для "
-                f"{contact_label(item.contact_name, item.contact_username)}."
+                f"{contact_label(item.contact_name, item.contact_username)}. "
+                "Відповідь на цей запит одразу надійде контакту, навіть у тестовому режимі."
             ),
             reply_markup=ForceReply(
                 selective=True,
@@ -348,7 +360,10 @@ class SummaryActions:
 
         prompt = await self.bot.send_message(
             chat_id=query.from_user.id,
-            text=f"✍️ Напишіть повідомлення для {selected_label}.",
+            text=(
+                f"✍️ Напишіть повідомлення для {selected_label}. "
+                "Відповідь на цей запит одразу надійде контакту, навіть у тестовому режимі."
+            ),
             reply_markup=ForceReply(
                 selective=True,
                 input_field_placeholder="Повідомлення буде надіслане від бота",
