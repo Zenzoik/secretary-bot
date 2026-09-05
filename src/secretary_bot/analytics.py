@@ -173,6 +173,10 @@ async def build_analytics(
             item["contact_id"],
         ),
     )
+    for item in items:
+        item["contact_label"] = contact_label(
+            item["contact_name"], item["contact_username"]
+        )
     totals = _totals(items)
     return {
         "period": {

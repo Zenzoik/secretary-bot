@@ -260,6 +260,7 @@ async def test_three_day_analytics_and_monthly_pdf_include_all_contacts(
     }
     by_id = {item["contact_id"]: item for item in payload["items"]}
     assert by_id[101]["messages"] == 2
+    assert by_id[101]["contact_label"] == "Олена Клієнт · @olena"
     assert by_id[101]["message_directions"] == {"in": 1, "out": 1}
     assert by_id[101]["ordinary_requests"] == 1
     assert by_id[101]["paid_requests"] == 1
