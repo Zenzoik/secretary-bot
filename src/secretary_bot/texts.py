@@ -114,7 +114,7 @@ DIRECT_REPLY_CANCELLED = "Надсилання скасовано."
 FEEDBACK_BUTTONS = (
     ("ok", "✅ Норм"),
     ("wrong", "❌ Не треба було"),
-    ("exclude", "🚫 Виключити"),
+    ("exclude", "🚫 Позначити для виключення"),
 )
 
 FEEDBACK_RESULTS = {
