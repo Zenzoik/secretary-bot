@@ -32,6 +32,9 @@ class FakeRedis:
         self.values[name] = value
         return True
 
+    async def get(self, name):
+        return self.values.get(name)
+
     async def delete(self, *names: str) -> int:
         if self.fail:
             raise ConnectionError("simulated connection failure")
@@ -68,7 +71,7 @@ def test_business_message_key_uses_stable_ids_without_body() -> None:
 
 
 @pytest.mark.asyncio
-async def test_redis_claim_is_atomic_and_has_24_hour_ttl() -> None:
+async def test_redis_claim_is_atomic_and_has_short_processing_lease() -> None:
     redis = FakeRedis()
     deduplicator = RedisDeduplicator(client=redis, ttl_seconds=86400)
 
@@ -76,8 +79,8 @@ async def test_redis_claim_is_atomic_and_has_24_hour_ttl() -> None:
     assert await deduplicator.claim("update:1") is False
     assert redis.set_calls[0] == {
         "name": "secretary:dedup:update:1",
-        "value": "1",
-        "ex": 86400,
+        "value": "processing",
+        "ex": 45,
         "nx": True,
     }
 

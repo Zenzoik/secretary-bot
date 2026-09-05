@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol
 
@@ -32,6 +33,8 @@ class Deduplicator(Protocol):
 class RedisClient(Protocol):
     async def set(self, name: str, value: str, *, ex: int, nx: bool) -> Any: ...
 
+    async def get(self, name: str) -> Any: ...
+
     async def delete(self, *names: str) -> int: ...
 
     async def aclose(self) -> None: ...
@@ -48,9 +51,15 @@ class RedisDeduplicator:
         client = Redis.from_url(url, decode_responses=True)
         return cls(client=client, ttl_seconds=ttl_seconds)
 
+    async def is_completed(self, key: str) -> bool:
+        return await self.client.get(self._qualified(key)) == "done"
+
+    async def complete(self, key: str) -> None:
+        await self.client.set(self._qualified(key), "done", ex=self.ttl_seconds, nx=False)
+
     async def claim(self, key: str) -> bool:
         try:
-            result = await self.client.set(self._qualified(key), "1", ex=self.ttl_seconds, nx=True)
+            result = await self.client.set(self._qualified(key), "processing", ex=45, nx=True)
         except RedisError as exc:
             raise DeduplicationUnavailable("could not claim update") from exc
         return bool(result)
@@ -77,14 +86,33 @@ class IngestResult(StrEnum):
 class UpdateIngestor:
     queue: asyncio.Queue[Update]
     deduplicator: Deduplicator
+    processor: Callable[[Update], Awaitable[None]] | None = None
+    concurrency: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(8))
     accepted_updates: int = 0
     duplicate_updates: int = 0
 
     async def enqueue(self, update: Update) -> IngestResult:
         key = deduplication_key(update)
         if not await self.deduplicator.claim(key):
+            completed = getattr(self.deduplicator, "is_completed", None)
+            if self.processor is not None and completed is not None and not await completed(key):
+                raise IngestQueueFull("update is still processing; retry")
             self.duplicate_updates += 1
             return IngestResult.DUPLICATE
+
+        if self.processor is not None:
+            try:
+                async with asyncio.timeout(30):
+                    async with self.concurrency:
+                        await self.processor(update)
+                    complete = getattr(self.deduplicator, "complete", None)
+                    if complete is not None:
+                        await complete(key)
+            except BaseException:
+                await asyncio.shield(self.deduplicator.release(key))
+                raise
+            self.accepted_updates += 1
+            return IngestResult.ACCEPTED
 
         try:
             self.queue.put_nowait(update)

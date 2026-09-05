@@ -39,6 +39,7 @@ services:
 
   app:
     build: .
+    stop_grace_period: 45s
     environment:
       BOT_TOKEN: ${BOT_TOKEN:?set BOT_TOKEN in .env}
       WEBHOOK_SECRET: ${WEBHOOK_SECRET:?set WEBHOOK_SECRET in .env}
@@ -66,7 +67,7 @@ services:
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz')"]
       interval: 30s
       timeout: 5s
       retries: 3

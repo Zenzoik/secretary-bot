@@ -830,7 +830,21 @@ async def capture_message(
     body_encrypted: bytes,
     retention_until: datetime,
 ) -> int:
-    """Store an encrypted, short-lived message body for summary generation."""
+    """Store one encrypted body per message, including webhook retries."""
+    if tg_message_id is not None:
+        existing = await session.scalar(
+            select(models.MessageLog.id)
+            .where(
+                models.MessageLog.connection_id == connection_id,
+                models.MessageLog.contact_id == contact_id,
+                models.MessageLog.tg_message_id == tg_message_id,
+                models.MessageLog.direction == direction,
+                models.MessageLog.action == LogAction.CAPTURED.value,
+            )
+            .limit(1)
+        )
+        if existing is not None:
+            return existing
     row = models.MessageLog(
         connection_id=connection_id,
         contact_id=contact_id,

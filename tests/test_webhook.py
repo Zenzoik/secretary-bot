@@ -7,9 +7,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+import pytest_asyncio
 from aiogram.types import BusinessConnection
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from sqlalchemy.pool import NullPool
 
 from secretary_bot import models
 from secretary_bot.application import create_app
@@ -25,6 +27,18 @@ from secretary_bot.storage import (
 )
 from tests.test_delayed import FakeSortedSet
 from tests.test_pipeline import FakeNotifier
+
+
+@pytest_asyncio.fixture
+async def database(tmp_path):
+    # TestClient runs workers in another thread. A single shared in-memory
+    # connection cannot model independent concurrent PostgreSQL transactions.
+    db = Database.from_url(f"sqlite+aiosqlite:///{tmp_path / 'webhook.sqlite'}", poolclass=NullPool)
+    async with db.engine.begin() as connection:
+        await connection.run_sync(models.Base.metadata.create_all)
+    yield db
+    await db.aclose()
+
 
 SECRET = "test_webhook_secret"
 CONNECTION_UPDATE = {
