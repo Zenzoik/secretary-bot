@@ -49,3 +49,8 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.coverage.run]
+# SQLAlchemy asyncio runs driver calls inside greenlets; without this the code
+# after an awaited query inside a request handler is not traced.
+concurrency = ["greenlet", "thread"]
