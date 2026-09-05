@@ -16,6 +16,7 @@ from aiogram.types import (
     WebAppInfo,
 )
 
+from secretary_bot import models
 from secretary_bot import texts as ui
 from secretary_bot.callbacks import finalize_callback
 from secretary_bot.delayed import DelayedReplyQueue
@@ -438,6 +439,15 @@ class ControlPlane:
                 _render_status(fresh, now=now),
                 _main_keyboard(fresh, now=now, is_master=is_master),
             )
+        if command == "dryrun":
+            row = await session.get(models.Connection, connection.id)
+            assert row is not None
+            row.dry_run = True
+            await cancel_live_confirmation(session, connection.id)
+            await set_control_state(session, connection.id, "main")
+            await session.flush()
+            fresh = await self._fresh_connection(session, connection)
+            return ControlResponse(ui.DRY_RUN_SAVED, _main_keyboard(fresh, now=now))
         if command == "off":
             await set_connection_control(session, connection.id, kill_switch=True, muted_until=None)
             await cancel_live_confirmation(session, connection.id)
@@ -670,6 +680,7 @@ def _control_intent(text: str, *, state: str) -> tuple[str, str] | None:
         "mute",
         "today",
         "live",
+        "dryrun",
         "users",
         "invite",
     }
@@ -696,6 +707,7 @@ def _control_intent(text: str, *, state: str) -> tuple[str, str] | None:
         BUTTON_OFF: ("off", ""),
         BUTTON_ON: ("on", ""),
         BUTTON_MUTE: ("mute", ""),
+        ui.BUTTON_DRY_RUN: ("dryrun", ""),
         BUTTON_LIVE: ("live", ""),
         BUTTON_LIVE_ACTIVE: ("status", ""),
         BUTTON_USERS: ("users", ""),
@@ -937,6 +949,7 @@ def _main_keyboard(
     rows = [
         [KeyboardButton(text=BUTTON_STATUS), KeyboardButton(text=BUTTON_TODAY)],
         [KeyboardButton(text=power_button), KeyboardButton(text=BUTTON_MUTE)],
+        [KeyboardButton(text=BUTTON_LIVE if connection.dry_run else ui.BUTTON_DRY_RUN)],
         [KeyboardButton(text=BUTTON_SEND_BOT)],
     ]
     return ReplyKeyboardMarkup(

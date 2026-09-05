@@ -172,6 +172,7 @@ async def test_start_opens_the_button_control_panel(database: Database) -> None:
         BUTTON_TODAY,
         BUTTON_OFF,
         BUTTON_MUTE,
+        BUTTON_LIVE,
         BUTTON_SEND_BOT,
     ]
     assert bot.menu_buttons[0]["chat_id"] == 42
@@ -310,7 +311,7 @@ async def test_onboarding_fsm_persists_and_finishes_in_safe_dry_run(
     assert connection.dry_run is True
     assert connection.policy.kill_switch is False
     assert BUTTON_USERS not in keyboard_texts(bot.sent[-1])
-    assert BUTTON_LIVE not in keyboard_texts(bot.sent[-1])
+    assert BUTTON_LIVE in keyboard_texts(bot.sent[-1])
 
 
 @pytest.mark.asyncio
