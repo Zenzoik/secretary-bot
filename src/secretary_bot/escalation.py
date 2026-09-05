@@ -11,6 +11,7 @@ from sqlalchemy import update
 
 from secretary_bot import models
 from secretary_bot.identities import contact_label
+from secretary_bot.outbox import deliver_notifications
 from secretary_bot.sender import BusinessReplySender
 from secretary_bot.storage import Database, load_owner_connection, normalize_contact_username
 from secretary_bot.texts import as_bot_reply
@@ -234,32 +235,44 @@ class EscalationActions:
             total_count = 0 if activity is None else activity.off_hours_request_count
             paid_count = 0 if activity is None else activity.paid_escalation_count
 
+            who = contact_label(contact_name, contact_username)
+            session.add(
+                models.NotificationJob(
+                    key=f"paid-contact:{request_id}",
+                    connection_id=connection.id,
+                    due_at=now,
+                    payload={
+                        "business_connection_id": business_connection_id,
+                        "chat_id": contact_id,
+                        "text": as_bot_reply(confirm_text),
+                    },
+                )
+            )
+            if owner_chat_id is not None:
+                session.add(
+                    models.NotificationJob(
+                        key=f"paid-owner:{request_id}",
+                        connection_id=connection.id,
+                        due_at=now,
+                        payload={
+                            "business_connection_id": None,
+                            "chat_id": owner_chat_id,
+                            "text": (
+                                f"🚨 Платне термінове звернення\nКонтакт: {who}\n"
+                                f"Вартість: {_price(amount, currency)}\n"
+                                f"Статистика контакту: {paid_count} платних із {total_count} "
+                                "звернень поза графіком"
+                            ),
+                            "reply_markup": escalation_owner_keyboard(
+                                request_id, contact_username=contact_username
+                            ).model_dump(mode="json"),
+                        },
+                    )
+                )
+
         await self._clear_keyboard(query, business_connection_id)
         await self._answer(query, "Платне звернення підтверджено.")
-        await self.sender.send(
-            business_connection_id=business_connection_id,
-            chat_id=contact_id,
-            text=as_bot_reply(confirm_text),
-        )
-        if owner_chat_id is not None:
-            who = contact_label(contact_name, contact_username)
-            sent = await self.bot.send_message(
-                chat_id=owner_chat_id,
-                text=(
-                    f"🚨 Платне термінове звернення\n"
-                    f"Контакт: {who}\n"
-                    f"Вартість: {_price(amount, currency)}\n"
-                    f"Статистика контакту: {paid_count} платних із {total_count} "
-                    "звернень поза графіком"
-                ),
-                reply_markup=escalation_owner_keyboard(
-                    request_id, contact_username=contact_username
-                ),
-            )
-            async with self.database.session() as session, session.begin():
-                stored = await session.get(models.ContactRequest, request_id)
-                if stored is not None:
-                    stored.owner_notification_message_id = getattr(sent, "message_id", None)
+        await deliver_notifications(self.database, self.sender)
         return True
 
     async def _cancel(self, query: CallbackQuery, *, request_id: int, now: datetime) -> bool:
