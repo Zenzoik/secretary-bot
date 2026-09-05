@@ -5,6 +5,10 @@ from sqlalchemy.schema import CreateIndex, CreateTable
 from secretary_bot.models import Base
 
 EXPECTED_TABLES = {
+    "reply_jobs",
+    "delivery_receipts",
+    "notification_jobs",
+    "pdf_tokens",
     "access_invites",
     "access_users",
     "connections",
@@ -43,6 +47,7 @@ def test_schema_can_be_created_in_dependency_order() -> None:
 
 def test_tenant_tables_cascade_from_connection() -> None:
     direct_tenant_tables = EXPECTED_TABLES - {
+        "pdf_tokens",
         "access_invites",
         "access_users",
         "connections",

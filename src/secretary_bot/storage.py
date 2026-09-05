@@ -971,6 +971,7 @@ async def record_off_hours_request(
         select(models.ContactRequest).where(
             models.ContactRequest.connection_id == connection_id,
             models.ContactRequest.tg_message_id == tg_message_id,
+            models.ContactRequest.contact_id == contact_id,
         )
     )
     if existing is not None:
