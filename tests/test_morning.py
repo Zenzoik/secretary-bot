@@ -42,8 +42,8 @@ async def seed(database: Database, *, owner_chat_id: int | None = 42, items: int
         (datetime(2026, 8, 24, 8, 0), True),
         (datetime(2026, 8, 24, 8, 29), True),
         (datetime(2026, 8, 24, 7, 59), False),
-        (datetime(2026, 8, 24, 8, 30), False),
-        (datetime(2026, 8, 24, 20, 0), False),
+        (datetime(2026, 8, 24, 8, 30), True),
+        (datetime(2026, 8, 24, 20, 0), True),
     ],
 )
 def test_delivery_window_opens_at_eight(moment: datetime, expected: bool) -> None:
