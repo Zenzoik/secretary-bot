@@ -63,6 +63,15 @@ button, label, input, select, textarea { -webkit-tap-highlight-color: transparen
 .small { font-size: 11px; }
 .divider { height: 1px; margin: 28px 0; background: var(--border); }
 .subheading { margin-top: 24px; display: flex; justify-content: space-between; align-items: center; }
+.contact-schedule-heading { align-items: end; gap: 14px; }
+.contact-schedule-heading strong, .contact-schedule-heading small { display: block; }
+.contact-schedule-heading small { margin-top: 4px; color: var(--muted); }
+.contact-schedule-actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.effective-schedule { display: grid; gap: 8px; margin-top: 12px; }
+.effective-schedule > div { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 13px 14px; border: 1px solid var(--border); border-radius: 11px; background: #101925; }
+.effective-schedule strong { font-size: 13px; }
+.effective-schedule span { color: var(--muted); font-size: 12px; }
+.effective-schedule b { color: var(--text); font-weight: 600; }
 
 .status-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
 .status-card { min-height: 116px; padding: 18px; border: 1px solid var(--border); border-radius: 15px; background: var(--surface); }
@@ -232,6 +241,10 @@ tbody tr:last-child td { border-bottom: 0; }
   .direction-card .keywords, .direction-card .switch-row { grid-column: auto; }
   fieldset { grid-template-columns: 1fr; }
   fieldset input[type="datetime-local"] { grid-column: auto; }
+  .contact-schedule-heading { align-items: start; }
+  .contact-schedule-heading, .contact-schedule-actions { display: grid; grid-template-columns: 1fr; }
+  .contact-schedule-actions .text-button { padding-left: 0; }
+  .effective-schedule > div { align-items: start; flex-direction: column; gap: 5px; }
   .switch-row { width: 100%; gap: 12px; }
   .switch-row input { flex-basis: 38px; margin: 0; }
   .retention-switch { align-items: flex-start; }

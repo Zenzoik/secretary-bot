@@ -246,7 +246,10 @@ def test_settings_app_and_assets_are_served_without_exposing_secrets(world) -> N
     assert "Спільний максимум, с" in page.text
     assert "Мін. затримка власника, с" not in page.text
     assert "Зберігати тексти для підсумку" in page.text
-    assert "Відповіді цьому контакту" in page.text
+    assert "Режим відповідей" in page.text
+    assert "Відповідати за розкладом нижче" in page.text
+    assert "Коли бот відповідає" in page.text
+    assert "За загальним розкладом" not in page.text
     assert "Коли не відповідати" not in page.text
     assert "48 годин" in page.text
     assert 'content="http://testserver/assets/og.png"' in page.text

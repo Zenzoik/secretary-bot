@@ -165,8 +165,34 @@
     $(".time-from", node).value = data.time_from.slice(0, 5);
     $(".time-to", node).value = data.time_to.slice(0, 5);
     $(".is-active", node).checked = data.is_active;
-    $(".remove-window", node).addEventListener("click", () => node.remove());
+    $(".remove-window", node).addEventListener("click", () => {
+      node.remove();
+      if (container.id === "contact-windows") renderContactScheduleEditor();
+    });
     container.append(node);
+  }
+
+  const weekdayLabels = {
+    127: "Щодня", 31: "Будні", 96: "Вихідні", 1: "Понеділок", 2: "Вівторок",
+    4: "Середа", 8: "Четвер", 16: "П’ятниця", 32: "Субота", 64: "Неділя",
+  };
+
+  function renderContactScheduleEditor() {
+    const container = $("#contact-windows");
+    const hasPersonalSchedule = $$(".window-row", container).length > 0;
+    const inheritedWindows = state.bootstrap?.schedule?.windows || [];
+    $("#contact-schedule-source").textContent = hasPersonalSchedule
+      ? "Окремий час для цього контакту"
+      : "Зараз використовується основний розклад";
+    $("#add-contact-window").textContent = hasPersonalSchedule ? "+ Додати інтервал" : "Змінити для контакту";
+    $("#reset-contact-windows").classList.toggle("hidden", !hasPersonalSchedule);
+    container.classList.toggle("hidden", !hasPersonalSchedule);
+    const preview = $("#contact-schedule-preview");
+    preview.classList.toggle("hidden", hasPersonalSchedule);
+    const activeInheritedWindows = inheritedWindows.filter((window) => window.is_active);
+    preview.innerHTML = activeInheritedWindows.length
+      ? activeInheritedWindows.map((window) => `<div><strong>${escapeHtml(weekdayLabels[window.weekday_mask] || "Обрані дні")}</strong><span>Від <b>${escapeHtml(window.time_from.slice(0, 5))}</b> до <b>${escapeHtml(window.time_to.slice(0, 5))}</b></span></div>`).join("")
+      : '<div><span>Основний розклад ще не налаштовано.</span></div>';
   }
 
   function windowsPayload(container) {
@@ -297,6 +323,7 @@
     const windows = $("#contact-windows");
     windows.innerHTML = "";
     state.selectedContact.windows.forEach((window) => createWindow(windows, window));
+    renderContactScheduleEditor();
   }
 
   async function loadLogs() {
@@ -434,7 +461,20 @@
     }); });
     let searchTimer;
     $("#contact-search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadContacts, 250); });
-    $("#add-contact-window").addEventListener("click", () => createWindow($("#contact-windows")));
+    $("#add-contact-window").addEventListener("click", () => {
+      const container = $("#contact-windows");
+      if (!$(".window-row", container)) {
+        const inheritedWindows = state.bootstrap.schedule.windows.filter((window) => window.is_active);
+        (inheritedWindows.length ? inheritedWindows : [undefined]).forEach((window) => createWindow(container, window));
+      } else {
+        createWindow(container);
+      }
+      renderContactScheduleEditor();
+    });
+    $("#reset-contact-windows").addEventListener("click", () => {
+      $("#contact-windows").innerHTML = "";
+      renderContactScheduleEditor();
+    });
     $("#contact-form").addEventListener("submit", (event) => { event.preventDefault(); if (!state.selectedContact) return; submit(event.currentTarget, async () => {
       const form = event.currentTarget;
       const exclusion = form.elements.exclusion.value;
