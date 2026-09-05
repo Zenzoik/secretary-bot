@@ -8,3 +8,5 @@ tests
 docs
 plan.md
 tech-stack.md
+
+node_modules/

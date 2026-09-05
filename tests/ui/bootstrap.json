@@ -1,0 +1,117 @@
+{
+  "user": {
+    "id": 42,
+    "username": "Owner",
+    "role": "master"
+  },
+  "connection": {
+    "id": 1,
+    "is_active": true,
+    "dry_run": true,
+    "kill_switch": false,
+    "muted_until": null,
+    "rights": {
+      "can_reply": true
+    }
+  },
+  "status": {
+    "code": "outside_schedule",
+    "label": "Зараз поза основним розкладом",
+    "timezone": "Europe/Kyiv",
+    "muted_until": null,
+    "next_start": "2026-09-05T22:00:00+03:00",
+    "window_end": null,
+    "last_reply_at": null,
+    "last_error": null,
+    "summary_status": "none",
+    "pending_notifications": 0,
+    "uncertain_deliveries": 0,
+    "note": "Персональні правила контактів можуть відрізнятися від основного розкладу."
+  },
+  "delivery": {
+    "sender_identity": "bot",
+    "delay_min_seconds": 10,
+    "delay_max_seconds": 60,
+    "bot_delay_seconds": 5,
+    "mark_read": false,
+    "max_auto_replies_per_window": null
+  },
+  "escalation": {
+    "enabled": false,
+    "price_amount": "0.00",
+    "currency": "UAH",
+    "offer_text": "Якщо відповідь потрібна терміново, можна створити платне звернення.",
+    "confirm_text": "Платне звернення підтверджено. Зв’язок не гарантовано, але звернення буде враховано в рахунку наприкінці місяця.",
+    "decline_text": "На жаль, зараз немає можливості відповісти терміново."
+  },
+  "schedule": {
+    "timezone": "Europe/Kyiv",
+    "windows": [
+      {
+        "id": 1,
+        "weekday_mask": 127,
+        "time_from": "22:00",
+        "time_to": "08:00",
+        "is_active": true
+      }
+    ]
+  },
+  "templates": {
+    "off_hours_default": "Зараз неробочий час, відповім пізніше",
+    "money_priority": "Зараз неробочий час. Питання щодо оплати побачив, відповім насамперед уранці."
+  },
+  "classifier": {
+    "directions": [
+      {
+        "code": "general",
+        "label": "Загальне",
+        "description": "Усі повідомлення, що не стосуються оплати.",
+        "keywords": [],
+        "is_active": true
+      },
+      {
+        "code": "money",
+        "label": "Гроші",
+        "description": "Оплата, рахунки, аванс, борги та реквізити.",
+        "keywords": [
+          "счет",
+          "счёт",
+          "рахунок",
+          "оплат",
+          "платеж",
+          "платіж",
+          "инвойс",
+          "invoice",
+          "payment",
+          "реквизит",
+          "реквізит",
+          "аванс",
+          "предоплат",
+          "передоплат",
+          "долг",
+          "борг",
+          "гривн",
+          "гривен",
+          "євро",
+          "евро",
+          "доллар",
+          "долар"
+        ],
+        "is_active": true
+      }
+    ],
+    "system_prompt": "Ти класифікуєш одне вхідне повідомлення з особистого листування.\n\nКатегорії:\n- money — гроші: оплата, рахунок, інвойс, реквізити, аванс, борг, строки платежу.\n- general — усе інше.\n\nВідповідай строгим JSON: category, confidence (0.0–1.0), reason — коротке\nпояснення для журналу українською, без цитат із повідомлення.\nЯкщо сумніваєшся — став general і низьку впевненість.",
+    "model": "claude-sonnet-4-6",
+    "confidence_min": "0.70"
+  },
+  "summary": {
+    "summary_time": "09:00",
+    "summary_channel_id": null,
+    "summary_channel_title": null,
+    "message_retention_enabled": false,
+    "retention_hours": 48,
+    "retained_message_count": 0,
+    "retained_bytes": 0,
+    "next_deletion_at": null
+  }
+}

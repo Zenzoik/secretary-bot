@@ -9,9 +9,10 @@
     <meta property="og:description" content="Налаштування без зайвих кроків">
     <meta property="og:image" content="{{BASE_URL}}/assets/og.png">
     <title>Personal Secretary — налаштування</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260905-4">
+    <link rel="stylesheet" href="/assets/styles.css?v=20260905-audit3">
     <script src="https://telegram.org/js/telegram-web-app.js?59"></script>
-    <script src="/assets/app.js?v=20260905-4" defer></script>
+    <script src="/assets/ui-utils.js?v=20260905-audit3" defer></script>
+    <script src="/assets/app.js?v=20260905-audit3" defer></script>
   </head>
   <body>
     <div class="app-shell" id="app" aria-busy="true">
@@ -61,9 +62,26 @@
           <p>У Telegram натисніть кнопку меню бота. Для браузера використайте одноразове посилання з уже авторизованої панелі.</p>
         </section>
 
+        <section id="load-error" class="panel hidden" role="alert">
+          <h2>Не вдалося завантажити панель</h2><p id="load-error-message"></p>
+          <button id="retry-load" class="primary" type="button">Спробувати ще раз</button>
+        </section>
         <div id="views" class="hidden">
           <section class="view" data-view-panel="overview">
+            <section class="panel" aria-labelledby="operating-title">
+              <h2 id="operating-title">Стан секретаря</h2>
+              <p id="operating-note" aria-live="polite"></p>
+              <div class="quick-actions">
+                <button class="secondary" data-control="pause" type="button">Пауза на 1 годину</button>
+                <button class="secondary" data-control="resume" type="button">Відновити</button>
+                <button class="secondary" data-control="stop" type="button">Вимкнути</button>
+                <button class="secondary" data-control="dry_run" type="button">Лише тестові прев’ю</button>
+                <button class="primary" data-control="live" type="button">Увімкнути відповіді клієнтам</button>
+                <button class="secondary hidden" id="retry-notifications" type="button">Повторити недоставлені сповіщення</button>
+              </div>
+            </section>
             <div class="status-grid" id="status-grid"></div>
+            <p id="operating-history" class="muted"></p>
             <div class="mobile-web-action"><button class="secondary browser-link-action" type="button">Скопіювати вхід для браузера</button></div>
             <form class="panel" id="delivery-form">
               <div class="panel-heading">
@@ -133,7 +151,7 @@
                 <label class="search"><span>Пошук</span><input id="contact-search" type="search" placeholder="Ім’я або @username"></label>
               </div>
               <div class="contact-layout">
-                <div class="contact-list" id="contact-list"></div>
+                <div><div class="contact-list" id="contact-list"></div><button id="more-contacts" type="button" class="secondary hidden">Ще контакти</button></div>
                 <form class="contact-editor empty" id="contact-form">
                   <div id="contact-empty">Оберіть контакт, щоб змінити правила.</div>
                   <div id="contact-fields" class="hidden">
@@ -158,6 +176,13 @@
                 </form>
               </div>
             </div>
+            <form class="panel" id="preview-form">
+              <h2>Перевірити правило без надсилання</h2>
+              <p class="muted">Для обраного контакту або основного розкладу. Тип визначається за ключовими словами; ШІ може обрати інакше. Текст не зберігається.</p>
+              <label>Приклад повідомлення<textarea name="text" rows="3" maxlength="2000" required></textarea></label>
+              <button type="submit" class="secondary">Перевірити</button>
+              <p id="preview-result" aria-live="polite"></p>
+            </form>
           </section>
 
           <section class="view" data-view-panel="templates">
@@ -175,12 +200,13 @@
             <form class="panel" id="classifier-form">
               <div class="panel-heading"><div><p class="eyebrow">Розпізнавання повідомлень</p><h2>Типи звернень</h2></div></div>
               <div class="direction-list" id="direction-list"></div>
-              <div class="divider"></div>
+              <details><summary>Розширені налаштування</summary>
               <label>Інструкція для ШІ<textarea name="system_prompt" rows="10" maxlength="8000" required></textarea></label>
               <div class="form-grid two">
                 <label>Модель<input name="model" maxlength="100" required></label>
                 <label>Поріг упевненості<input name="confidence_min" type="number" min="0" max="1" step="0.01" required></label>
               </div>
+              </details>
               <div class="form-actions"><button class="primary" type="submit">Зберегти типи звернень</button></div>
             </form>
           </section>
@@ -250,6 +276,7 @@
                 <button class="secondary" type="submit">Застосувати</button>
               </form>
               <div class="table-wrap"><table><thead><tr><th>Час</th><th>Контакт</th><th>Дія</th><th>Тип звернення</th><th>Деталі</th></tr></thead><tbody id="log-rows"></tbody></table></div>
+              <button id="more-logs" type="button" class="secondary hidden">Раніші записи</button>
             </div>
           </section>
         </div>

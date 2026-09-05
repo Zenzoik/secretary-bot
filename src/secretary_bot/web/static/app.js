@@ -1,6 +1,7 @@
 (() => {
   "use strict";
 
+  const ui = window.SecretaryUI;
   const tg = window.Telegram?.WebApp;
   const state = { bootstrap: null, contacts: [], logContacts: [], selectedContact: null, analytics: null, activeView: "overview" };
   const titles = {
@@ -21,8 +22,13 @@
 
   tg?.ready();
   tg?.expand();
-  tg?.setHeaderColor?.("#101925");
-  tg?.setBackgroundColor?.("#0d141f");
+  tg?.setHeaderColor?.("bg_color");
+  tg?.setBackgroundColor?.(tg?.themeParams?.bg_color || "#0d141f");
+  function applyTheme() {
+    document.documentElement.dataset.theme = tg?.colorScheme || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+  }
+  applyTheme();
+  tg?.onEvent?.("themeChanged", applyTheme);
 
   function authHeaders() {
     const headers = { "Content-Type": "application/json" };
@@ -38,6 +44,7 @@
       const detail = Array.isArray(payload.detail) ? payload.detail.map((item) => item.msg).join(". ") : payload.detail;
       const error = new Error(detail || "Не вдалося виконати дію");
       error.status = response.status;
+      error.details = Array.isArray(payload.detail) ? payload.detail : [];
       throw error;
     }
     return payload;
@@ -67,24 +74,77 @@
 
   const categoryLabels = { general: "Звичайне звернення", money: "Питання про оплату", unknown: "Без типу" };
   const templateLabels = { off_hours_default: "Звичайна відповідь", money_priority: "Питання про оплату" };
+  const errorLabels = {
+    DELIVERY_UNCERTAIN: "Результат невідомий: перевірте чат перед повтором",
+    BUSINESS_CHAT_INACTIVE: "Вікно відповіді закрите",
+    BUSINESS_CONNECTION_INVALID: "Перевірте підключення бота",
+    STALE_REPLY: "Запізнілу відповідь скасовано після простою",
+    NOTIFICATION_FAILED: "Сповіщення про платне звернення не доставлено",
+  };
 
   async function submit(form, callback) {
     const button = $("button[type=submit]", form);
     const original = button.textContent;
+    $$(".field-error", form).forEach(node => node.remove());
+    $$("[aria-invalid]", form).forEach(node => node.removeAttribute("aria-invalid"));
     button.disabled = true;
     button.textContent = "Зберігаємо…";
     try {
       const saved = await callback();
       if (saved === false) return;
+      setDirty(form, false);
       toast("Збережено");
       tg?.HapticFeedback?.notificationOccurred?.("success");
     } catch (error) {
+      const summary = document.createElement("p");
+      summary.className = "field-error";
+      summary.setAttribute("role", "alert");
+      summary.textContent = error.message;
+      form.append(summary);
+      for (const detail of error.details || []) {
+        const field = form.elements[detail.loc?.[1]];
+        if (field?.setAttribute) {
+          field.setAttribute("aria-invalid", "true");
+          const note = document.createElement("span"); note.className = "field-error"; note.textContent = detail.msg;
+          note.id = `${form.id}-${field.name}-error`; field.setAttribute("aria-describedby", note.id); field.after(note);
+        }
+      }
       toast(error.message, true);
       tg?.HapticFeedback?.notificationOccurred?.("error");
     } finally {
       button.disabled = false;
       button.textContent = original;
     }
+  }
+
+  function setDirty(form, dirty) {
+    form.dataset.dirty = String(dirty);
+    let badge = $(".dirty-note", form);
+    if (!badge) { badge = document.createElement("p"); badge.className = "dirty-note muted"; badge.setAttribute("role", "status"); form.append(badge); }
+    badge.textContent = dirty ? "Є незбережені зміни" : "";
+    let reset = $(".discard-changes", form);
+    if (!reset && form.id !== "preview-form") {
+      reset = document.createElement("button"); reset.type = "button"; reset.className = "secondary discard-changes"; reset.textContent = "Скасувати зміни";
+      reset.addEventListener("click", () => {
+        if (!window.confirm("Відкинути незбережені зміни цієї форми?")) return;
+        setDirty(form, false);
+        const fill = {"delivery-form":fillDelivery,"escalation-form":fillEscalation,"schedule-form":fillSchedule,"templates-form":fillTemplates,"classifier-form":fillClassifier,"summary-form":fillSummary,"contact-form":() => state.selectedContact && fillContactForm(state.selectedContact)}[form.id];
+        fill?.(); $$(".field-error", form).forEach(node => node.remove());
+      }); form.append(reset);
+    }
+    reset?.classList.toggle("hidden", !dirty);
+    const anyDirty = $$("form[data-dirty=true]").length > 0;
+    if (anyDirty) tg?.enableClosingConfirmation?.(); else tg?.disableClosingConfirmation?.();
+  }
+
+  async function refreshStatus() {
+    if (!state.bootstrap || document.hidden) return;
+    try {
+      const fresh = await api("/api/v1/bootstrap");
+      state.bootstrap.connection = fresh.connection;
+      state.bootstrap.status = fresh.status;
+      renderStatus();
+    } catch (error) { toast(error.status === 401 ? "Сеанс завершено. Відкрийте панель через бота." : "Не вдалося оновити стан. Спробуйте ще раз.", true); }
   }
 
   async function copyText(value) {
@@ -115,12 +175,20 @@
 
   function renderStatus() {
     const { connection, delivery } = state.bootstrap;
-    const live = !connection.dry_run && connection.is_active && !connection.kill_switch;
+    const current = state.bootstrap.status;
+    const live = current?.code === "live";
+    const statusLabel = current?.label || "Перевіряємо стан";
+    $("#operating-title").textContent = statusLabel;
+    $("#operating-note").textContent = [current?.muted_until && current.code === "paused" ? `До ${formatDate(current.muted_until)}` : "", current?.next_start ? `Наступне вікно: ${formatDate(current.next_start)}` : "", current?.note || "", `Часовий пояс розкладу: ${current?.timezone || "—"}`].filter(Boolean).join(" · ");
+    $("#operating-history").textContent = `Остання відповідь: ${formatDate(current?.last_reply_at)} · Остання помилка: ${errorLabels[current?.last_error] || current?.last_error || "немає"} · Підсумок: ${{none:"ще не сформовано",pending:"готується",delivered:"надіслано",error:"помилка"}[current?.summary_status] || "—"} · Очікують повідомлення: ${current?.pending_notifications || 0} · Недоставлені сповіщення: ${current?.failed_notifications || 0} · Надсилання для перевірки в чаті: ${current?.uncertain_deliveries || 0}`;
+    $("#retry-notifications").classList.toggle("hidden", !(current?.failed_notifications > 0));
+    $("[data-control=live]").classList.toggle("hidden", !connection.dry_run);
+    $("[data-control=dry_run]").classList.toggle("hidden", connection.dry_run);
     const rights = connection.rights || {};
     $("#connection-pill").className = `connection-pill ${live ? "live" : connection.is_active ? "" : "off"}`;
-    $("#connection-pill span:last-child").textContent = live ? "Активний" : connection.dry_run ? "Чернетки" : "Зупинено";
+    $("#connection-pill span:last-child").textContent = live ? "Активний" : current?.code === "dry_run" ? "Тест" : "Не відповідає";
     $("#status-grid").innerHTML = [
-      ["Режим", live ? "Відповідає клієнтам" : connection.dry_run ? "Лише чернетки" : "Зупинено", live ? "Автовідповіді активні" : connection.dry_run ? "Клієнти не отримують відповіді" : "Перевірте стан"],
+      ["Режим", statusLabel, live ? "Автовідповіді активні" : connection.dry_run ? "Клієнти не отримують відповіді" : "Перевірте стан"],
       ["Відправник", delivery.sender_identity === "bot" ? "Секретар" : "Власник", delivery.sender_identity === "bot" ? "З видимим підписом" : "Без підпису"],
       ["Затримка", delivery.sender_identity === "bot" ? `${delivery.bot_delay_seconds}–${Math.min(delivery.delay_max_seconds, 60)} с` : `${delivery.delay_min_seconds}–${delivery.delay_max_seconds} с`, "Випадковий інтервал"],
       ["Права", rights.can_reply ? (rights.can_read_messages ? "Відповідь + читання" : "Тільки відповідь") : "Немає відповіді", rights.can_reply ? "Telegram Business" : "Потрібна увага"],
@@ -155,7 +223,7 @@
     const ownerMin = form.elements.delay_min_seconds.value;
     const botMin = form.elements.bot_delay_seconds.value;
     const maximum = form.elements.delay_max_seconds.value;
-    $("#bot-delay-range").textContent = botMin && maximum ? `${botMin}–${maximum} с` : "—";
+    $("#bot-delay-range").textContent = botMin && maximum ? `${botMin}–${ui.botMaximum(maximum)} с` : "—";
     $("#owner-delay-range").textContent = ownerMin && maximum ? `${ownerMin}–${maximum} с` : "—";
   }
 
@@ -166,7 +234,9 @@
     $(".time-to", node).value = data.time_to.slice(0, 5);
     $(".is-active", node).checked = data.is_active;
     $(".remove-window", node).addEventListener("click", () => {
+      if (!window.confirm("Видалити цей інтервал? Зміна набуде чинності після збереження.")) return;
       node.remove();
+      setDirty(container.closest("form"), true);
       if (container.id === "contact-windows") renderContactScheduleEditor();
     });
     container.append(node);
@@ -238,6 +308,7 @@
   function fillSummary() {
     const form = $("#summary-form");
     const data = state.bootstrap.summary;
+    const unsaved = form.dataset.dirty === "true" ? {time:form.elements.summary_time.value, retention:form.elements.message_retention_enabled.checked} : null;
     form.elements.summary_time.value = data.summary_time;
     form.elements.summary_channel_id.value = data.summary_channel_id ?? "";
     form.elements.message_retention_enabled.checked = data.message_retention_enabled;
@@ -255,6 +326,7 @@
     $("#disconnect-summary-channel").classList.toggle("hidden", !connected);
     $("#choose-summary-channel").classList.toggle("hidden", !tg?.requestChat);
     if (!tg?.requestChat) $("#summary-channel-fallback").open = true;
+    if (unsaved) { form.elements.summary_time.value = unsaved.time; form.elements.message_retention_enabled.checked = unsaved.retention; }
   }
 
   const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -289,11 +361,15 @@
     }
   }
 
-  async function loadContacts() {
+  let contactRequest = 0;
+  async function loadContacts(append = false) {
     const search = $("#contact-search").value.trim();
+    const request = ++contactRequest;
     try {
-      const result = await api(`/api/v1/contacts?search=${encodeURIComponent(search)}`);
-      state.contacts = result.items;
+      const result = await api(`/api/v1/contacts?search=${encodeURIComponent(search)}&offset=${append ? state.contacts.length : 0}`);
+      if (request !== contactRequest) return;
+      state.contacts = append ? [...state.contacts, ...result.items] : result.items;
+      $("#more-contacts").classList.toggle("hidden", !result.has_more);
       renderContacts();
     } catch (error) { toast(error.message, true); }
   }
@@ -301,36 +377,51 @@
   function renderContacts() {
     const list = $("#contact-list");
     if (!state.contacts.length) {
-      list.innerHTML = '<div class="empty-row">Контакти з’являться після першого вхідного повідомлення.</div>';
+      list.innerHTML = `<div class="empty-row">${$("#contact-search").value.trim() ? "Контактів за цим пошуком немає. Спробуйте інше ім’я або @username." : "Контакти з’являться після першого вхідного повідомлення."}</div>`;
       return;
     }
-    list.innerHTML = state.contacts.map((contact) => `<button type="button" class="contact-item ${state.selectedContact?.contact_id === contact.contact_id ? "active" : ""}" data-contact-id="${contact.contact_id}"><strong>${escapeHtml(contactName(contact))}</strong><small>Останнє повідомлення: ${formatDate(contact.last_incoming_at)} · відповідей: ${contact.auto_reply_count} · платних звернень: ${contact.paid_escalation_count} із ${contact.off_hours_request_count}</small></button>`).join("");
+    list.innerHTML = state.contacts.map((contact) => `<button type="button" class="contact-item ${state.selectedContact?.contact_id === contact.contact_id ? "active" : ""}" data-contact-id="${contact.contact_id}"><strong>${escapeHtml(contactName(contact))}</strong><small>Останнє повідомлення: ${formatDate(contact.last_incoming_at)} · за 30 днів: ${contact.auto_reply_count} відповідей, ${contact.preview_count || 0} прев’ю · за весь час платних звернень: ${contact.paid_escalation_count} із ${contact.off_hours_request_count}</small></button>`).join("");
     $$(".contact-item", list).forEach((button) => button.addEventListener("click", () => selectContact(Number(button.dataset.contactId))));
   }
 
-  function selectContact(contactId) {
-    state.selectedContact = state.contacts.find((contact) => contact.contact_id === contactId);
-    if (!state.selectedContact) return;
+  function selectContact(contactId, saved = false) {
+    const editor = $("#contact-form");
+    if (!saved && editor.dataset.dirty === "true" && !window.confirm("Відкинути незбережені зміни контакту?")) return;
+    const contact = state.contacts.find((item) => item.contact_id === contactId);
+    if (!contact) return;
+    state.selectedContact = contact;
     renderContacts();
+    fillContactForm(contact);
+  }
+
+  // The selected card is kept as its own snapshot: a later search may drop it
+  // from the visible list, and discarding edits must still restore it.
+  function fillContactForm(contact) {
     const form = $("#contact-form");
+    setDirty(form, false);
     form.classList.remove("empty");
     $("#contact-empty").classList.add("hidden");
     $("#contact-fields").classList.remove("hidden");
-    $("#contact-title").textContent = contactName(state.selectedContact);
-    $("#contact-meta").textContent = `Останнє повідомлення: ${formatDate(state.selectedContact.last_incoming_at)}`;
-    $(`input[name=exclusion][value=${state.selectedContact.exclusion}]`, form).checked = true;
-    form.elements.exclusion_until.value = state.selectedContact.exclusion_until ? new Date(state.selectedContact.exclusion_until).toISOString().slice(0, 16) : "";
+    $("#contact-title").textContent = contactName(contact);
+    $("#contact-meta").textContent = `Останнє повідомлення: ${formatDate(contact.last_incoming_at)}. Дата паузи — у часовому поясі пристрою: ${Intl.DateTimeFormat().resolvedOptions().timeZone}. Розклад — ${state.bootstrap.schedule.timezone}.`;
+    $(`input[name=exclusion][value=${contact.exclusion}]`, form).checked = true;
+    form.dataset.exclusionOriginal = contact.exclusion_until || "";
+    form.elements.exclusion_until.value = contact.exclusion_until ? ui.localDateTime(contact.exclusion_until) : "";
     const windows = $("#contact-windows");
     windows.innerHTML = "";
-    state.selectedContact.windows.forEach((window) => createWindow(windows, window));
+    contact.windows.forEach((window) => createWindow(windows, window));
     renderContactScheduleEditor();
   }
 
-  async function loadLogs() {
+  async function loadLogs(append = false) {
     const form = $("#log-filter");
     if (!state.logContacts.length) {
-      const contacts = await api("/api/v1/contacts");
-      state.logContacts = contacts.items;
+      let offset = 0, more = true;
+      while (more) {
+        const page = await api(`/api/v1/contacts?offset=${offset}`);
+        state.logContacts.push(...page.items);
+        more = page.has_more; offset = page.next_offset;
+      }
       const selected = form.elements.contact_id.value;
       form.elements.contact_id.innerHTML = '<option value="">Усі контакти</option>' + state.logContacts.map((contact) => `<option value="${contact.contact_id}">${escapeHtml(contactName(contact))}</option>`).join("");
       form.elements.contact_id.value = selected;
@@ -339,8 +430,13 @@
     if (form.elements.contact_id.value) params.set("contact_id", form.elements.contact_id.value);
     if (form.elements.action.value) params.set("action", form.elements.action.value);
     try {
+      params.set("offset", append ? state.logOffset || 0 : 0);
       const result = await api(`/api/v1/logs?${params}`);
-      $("#log-rows").innerHTML = result.items.length ? result.items.map((row) => `<tr><td>${formatDate(row.occurred_at)}</td><td>${escapeHtml(row.contact_label)}</td><td>${escapeHtml(actionLabels[row.action] || row.action)}</td><td>${escapeHtml(categoryLabels[row.category] || "—")}</td><td>${escapeHtml(row.error_code || templateLabels[row.template_code] || "—")}</td></tr>`).join("") : '<tr><td class="empty-row" colspan="5">За вибраними фільтрами записів немає.</td></tr>';
+      state.logOffset = result.next_offset;
+      $("#more-logs").classList.toggle("hidden", !result.has_more);
+      const rows = result.items.length ? result.items.map((row) => `<tr><td>${formatDate(row.occurred_at)}</td><td>${escapeHtml(row.contact_label)}</td><td>${escapeHtml(actionLabels[row.action] || row.action)}</td><td>${escapeHtml(categoryLabels[row.category] || "—")}</td><td>${escapeHtml(errorLabels[row.error_code] || row.error_code || templateLabels[row.template_code] || "—")}</td></tr>`).join("") : '<tr><td class="empty-row" colspan="5">За вибраними фільтрами записів немає.</td></tr>';
+      if (append) $("#log-rows").insertAdjacentHTML("beforeend", rows); else $("#log-rows").innerHTML = rows;
+      labelTables();
     } catch (error) { toast(error.message, true); }
   }
 
@@ -395,6 +491,7 @@
       const categories = Object.keys(item.request_categories).length ? item.request_categories : item.categories;
       return `<tr><td><strong>${escapeHtml(name)}</strong></td><td>${item.messages}</td><td>${item.message_directions.in || 0} / ${item.message_directions.out || 0}</td><td>${item.ordinary_requests}</td><td>${item.paid_requests}</td><td>${escapeHtml(formatAmounts(item.paid_amounts))}</td><td>${escapeHtml(formatCategories(categories))}</td><td>${item.questions_asked} / ${item.questions_closed}</td></tr>`;
     }).join("") : '<tr><td class="empty-row" colspan="8">За вибраний період контактів немає.</td></tr>';
+    labelTables();
   }
 
   async function loadAnalytics() {
@@ -437,7 +534,47 @@
     return "downloaded";
   }
 
+  function labelTables() {
+    $$("table").forEach(table => {
+      const labels = $$("thead th", table).map(node => node.textContent);
+      $$("tbody tr", table).forEach(row => $$("td", row).forEach((cell, index) => { cell.dataset.label = labels[index] || ""; }));
+    });
+  }
+
   function bindEvents() {
+    $("#preview-form").addEventListener("submit", event => {
+      event.preventDefault(); const form = event.currentTarget;
+      withBusyButton($("button", form), "Перевіряємо…", async () => {
+        const result = await api("/api/v1/preview", {method:"POST", body:JSON.stringify({text:form.elements.text.value, contact_id:state.selectedContact?.contact_id || null})});
+        const draftNote = $("#contact-form").dataset.dirty === "true" ? "Перевірка за збереженими правилами: незбережені зміни контакту не враховано. " : "";
+        const templateNote = result.forced_template ? "Шаблон: персональний для контакту" : `Шаблон: ${templateLabels[result.template_code] || "за типом"}`;
+        $("#preview-result").textContent = `${draftNote}${result.decision === "allowed" ? (result.dry_run ? "Буде лише тестове прев’ю" : "Відповідь дозволена") : actionLabels[result.decision] || result.decision}. ${result.personal_schedule ? "Персональний" : "Основний"} розклад, ${result.timezone}. Тип: ${categoryLabels[result.category]}. ${templateNote}. Приклад відповіді: ${result.text}`;
+      });
+    });
+    $("#retry-notifications").addEventListener("click", (event) => withBusyButton(event.currentTarget, "Повторюємо…", async () => {
+      const fresh = await api("/api/v1/notifications/retry", {method:"POST"});
+      state.bootstrap.connection = fresh.connection; state.bootstrap.status = fresh.status;
+      renderStatus(); toast("Сповіщення поставлено в чергу повторно");
+    }));
+    $("#retry-load").addEventListener("click", () => location.reload());
+    $("#more-contacts").addEventListener("click", () => loadContacts(true));
+    $("#more-logs").addEventListener("click", () => loadLogs(true));
+    $$("form").filter(form => !form.id.endsWith("filter") && form.id !== "preview-form").forEach(form => {
+      form.addEventListener("input", () => setDirty(form, true));
+      form.addEventListener("change", () => setDirty(form, true));
+    });
+    window.addEventListener("beforeunload", event => {
+      if ($$("form[data-dirty=true]").length) { event.preventDefault(); event.returnValue = ""; }
+    });
+    document.addEventListener("visibilitychange", refreshStatus);
+    window.addEventListener("focus", refreshStatus);
+    $$("[data-control]").forEach(button => button.addEventListener("click", () => withBusyButton(button, "Змінюємо…", async () => {
+      const action = button.dataset.control;
+      if (action === "live" && !window.confirm("Дозволити секретарю надсилати реальні відповіді клієнтам за розкладом?")) return;
+      const fresh = await api("/api/v1/control", {method:"POST", body:JSON.stringify({action, confirmed:action === "live"})});
+      state.bootstrap.connection = fresh.connection; state.bootstrap.status = fresh.status;
+      renderStatus(); toast("Стан оновлено");
+    })));
     $$("[data-view]").forEach((button) => button.addEventListener("click", () => navigate(button.dataset.view)));
     ["delay_min_seconds", "delay_max_seconds", "bot_delay_seconds"].forEach((name) => {
       $("#delivery-form").elements[name].addEventListener("input", renderDelayRanges);
@@ -453,15 +590,17 @@
       state.bootstrap.escalation = await api("/api/v1/escalation", { method: "PUT", body: JSON.stringify({ enabled: form.elements.enabled.checked, price_amount: form.elements.price_amount.value, currency: form.elements.currency.value.trim().toUpperCase(), offer_text: form.elements.offer_text.value, confirm_text: form.elements.confirm_text.value, decline_text: form.elements.decline_text.value }) });
       fillEscalation();
     }); });
-    $("#add-schedule-window").addEventListener("click", () => createWindow($("#schedule-windows")));
+    $("#add-schedule-window").addEventListener("click", () => { createWindow($("#schedule-windows")); setDirty($("#schedule-form"), true); });
     $("#schedule-form").addEventListener("submit", (event) => { event.preventDefault(); submit(event.currentTarget, async () => {
       const windows = windowsPayload($("#schedule-windows"));
       if (!windows.length) throw new Error("Додайте хоча б одне вікно");
       state.bootstrap.schedule = await api("/api/v1/schedule", { method: "PUT", body: JSON.stringify({ timezone: event.currentTarget.elements.timezone.value, windows }) });
+      await refreshStatus();
     }); });
     let searchTimer;
     $("#contact-search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadContacts, 250); });
     $("#add-contact-window").addEventListener("click", () => {
+      setDirty($("#contact-form"), true);
       const container = $("#contact-windows");
       if (!$(".window-row", container)) {
         const inheritedWindows = state.bootstrap.schedule.windows.filter((window) => window.is_active);
@@ -472,6 +611,8 @@
       renderContactScheduleEditor();
     });
     $("#reset-contact-windows").addEventListener("click", () => {
+      if (!window.confirm("Повернути основний розклад? Зміна набуде чинності після збереження.")) return;
+      setDirty($("#contact-form"), true);
       $("#contact-windows").innerHTML = "";
       renderContactScheduleEditor();
     });
@@ -479,11 +620,12 @@
       const form = event.currentTarget;
       const exclusion = form.elements.exclusion.value;
       const rawUntil = form.elements.exclusion_until.value;
-      const saved = await api(`/api/v1/contacts/${state.selectedContact.contact_id}`, { method: "PUT", body: JSON.stringify({ exclusion, exclusion_until: exclusion === "until" && rawUntil ? new Date(rawUntil).toISOString() : null, windows: windowsPayload($("#contact-windows")) }) });
+      const saved = await api(`/api/v1/contacts/${state.selectedContact.contact_id}`, { method: "PUT", body: JSON.stringify({ exclusion, exclusion_until: exclusion === "until" ? ui.resolveDateTime(rawUntil, form.dataset.exclusionOriginal || null) : null, windows: windowsPayload($("#contact-windows")) }) });
       const index = state.contacts.findIndex((item) => item.contact_id === saved.contact_id);
-      state.contacts[index] = saved;
+      if (index >= 0) state.contacts[index] = saved;
       state.selectedContact = saved;
-      selectContact(saved.contact_id);
+      renderContacts();
+      fillContactForm(saved);
     }); });
     $("#templates-form").addEventListener("submit", (event) => { event.preventDefault(); submit(event.currentTarget, async () => {
       const form = event.currentTarget;
@@ -560,7 +702,11 @@
       state.bootstrap = await api("/api/v1/bootstrap");
     } catch (error) {
       $("#loading-state").classList.add("hidden");
-      $("#auth-state").classList.remove("hidden");
+      if (error.status === 401 || error.status === 403) $("#auth-state").classList.remove("hidden");
+      else {
+        $("#load-error").classList.remove("hidden");
+        $("#load-error-message").textContent = error.status === 409 ? "Завершіть підключення в чаті з ботом." : "Перевірте інтернет-з’єднання та повторіть завантаження.";
+      }
       $("#app").setAttribute("aria-busy", "false");
       return;
     }
