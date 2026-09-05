@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from secretary_bot import models
 from secretary_bot.actions import LogAction
+from secretary_bot.analytics import build_analytics, local_period, render_monthly_pdf
 from secretary_bot.classifier import (
     DEFAULT_CONFIDENCE_MIN,
     DEFAULT_MODEL,
@@ -540,6 +541,58 @@ def build_web_router(
                     action=action,
                 )
             }
+
+    @router.get("/api/v1/analytics")
+    async def analytics(
+        request: Request,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> dict[str, Any]:
+        async with database.session() as session, session.begin():
+            principal = await api.authorize(session, request)
+            zone = ZoneInfo(principal.connection.timezone)
+            local_today = datetime.now(zone).date()
+            resolved_to = date_to or local_today
+            resolved_from = date_from or (resolved_to - timedelta(days=29))
+            try:
+                local_period(resolved_from, resolved_to, principal.connection.timezone)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return await build_analytics(
+                session,
+                connection=principal.connection,
+                date_from=resolved_from,
+                date_to=resolved_to,
+            )
+
+    @router.get("/api/v1/analytics/monthly.pdf")
+    async def monthly_analytics_pdf(request: Request, month: str) -> Response:
+        try:
+            month_start = datetime.strptime(month, "%Y-%m").date().replace(day=1)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Місяць має формат РРРР-ММ") from exc
+        if month_start.strftime("%Y-%m") != month:
+            raise HTTPException(status_code=422, detail="Місяць має формат РРРР-ММ")
+        next_month = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+        month_end = next_month - timedelta(days=1)
+        async with database.session() as session, session.begin():
+            principal = await api.authorize(session, request)
+            report = await build_analytics(
+                session,
+                connection=principal.connection,
+                date_from=month_start,
+                date_to=month_end,
+            )
+        payload = render_monthly_pdf(report)
+        return Response(
+            content=payload,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="personal-secretary-{month}.pdf"'
+                )
+            },
+        )
 
     @router.post("/api/v1/auth/browser-link")
     async def browser_link(request: Request) -> dict[str, str]:

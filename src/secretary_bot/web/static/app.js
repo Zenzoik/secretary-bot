@@ -2,10 +2,11 @@
   "use strict";
 
   const tg = window.Telegram?.WebApp;
-  const state = { bootstrap: null, contacts: [], selectedContact: null, activeView: "overview" };
+  const state = { bootstrap: null, contacts: [], selectedContact: null, analytics: null, activeView: "overview" };
   const titles = {
     overview: "Огляд", schedule: "Розклад", contacts: "Контакти",
-    templates: "Шаблони", classifier: "Класифікація", summary: "Самарі", logs: "Журнал",
+    templates: "Шаблони", classifier: "Класифікація", summary: "Самарі",
+    analytics: "Аналітика", logs: "Журнал",
   };
   const actions = ["replied", "dry_run", "skipped_schedule", "skipped_excluded", "skipped_owner_replied", "skipped_window_limit", "skipped_kill_switch", "skipped_inactive", "skipped_unsupported_content", "error"];
   const actionLabels = {
@@ -101,6 +102,7 @@
     history.replaceState(null, "", `#${view}`);
     $(`[data-view="${view}"]`)?.scrollIntoView({ block: "nearest", inline: "center" });
     if (view === "contacts") loadContacts();
+    if (view === "analytics") loadAnalytics();
     if (view === "logs") loadLogs();
   }
 
@@ -301,6 +303,75 @@
     } catch (error) { toast(error.message, true); }
   }
 
+  function formatAmounts(amounts) {
+    const entries = Object.entries(amounts || {});
+    return entries.length ? entries.map(([currency, amount]) => `${amount} ${currency}`).join(", ") : "—";
+  }
+
+  function formatCategories(categories) {
+    const labels = { general: "Загальне", money: "Оплата", unknown: "Без напрямку" };
+    const entries = Object.entries(categories || {});
+    return entries.length ? entries.map(([code, count]) => `${labels[code] || code}: ${count}`).join(" · ") : "—";
+  }
+
+  function renderAnalytics() {
+    const data = state.analytics;
+    if (!data) return;
+    const totals = data.totals;
+    const form = $("#analytics-filter");
+    form.elements.date_from.value = data.period.date_from;
+    form.elements.date_to.value = data.period.date_to;
+    $("#analytics-timezone").textContent = `Часовий пояс: ${data.period.timezone}`;
+    $("#analytics-totals").innerHTML = [
+      ["Контакти", totals.contacts],
+      ["Повідомлення", totals.messages],
+      ["Звичайні звернення", totals.ordinary_requests],
+      ["Платні звернення", totals.paid_requests],
+      ["Питання", `${totals.questions_asked} / ${totals.questions_closed}`],
+      ["Нараховано", formatAmounts(totals.paid_amounts)],
+    ].map(([label, value]) => `<article><small>${label}</small><strong>${escapeHtml(value)}</strong></article>`).join("");
+    $("#analytics-rows").innerHTML = data.items.length ? data.items.map((item) => {
+      const name = item.contact_name || `Контакт ${item.contact_id}`;
+      const username = item.contact_username ? `<small>@${escapeHtml(item.contact_username)}</small>` : "";
+      const categories = Object.keys(item.request_categories).length ? item.request_categories : item.categories;
+      return `<tr><td><strong>${escapeHtml(name)}</strong>${username}<small>ID ${item.contact_id}</small></td><td>${item.messages}</td><td>${item.message_directions.in || 0} / ${item.message_directions.out || 0}</td><td>${item.ordinary_requests}</td><td>${item.paid_requests}</td><td>${escapeHtml(formatAmounts(item.paid_amounts))}</td><td>${escapeHtml(formatCategories(categories))}</td><td>${item.questions_asked} / ${item.questions_closed}</td></tr>`;
+    }).join("") : '<tr><td class="empty-row" colspan="8">За вибраний період контактів немає.</td></tr>';
+  }
+
+  async function loadAnalytics() {
+    const form = $("#analytics-filter");
+    const params = new URLSearchParams();
+    if (form.elements.date_from.value) params.set("date_from", form.elements.date_from.value);
+    if (form.elements.date_to.value) params.set("date_to", form.elements.date_to.value);
+    try {
+      state.analytics = await api(`/api/v1/analytics?${params}`);
+      renderAnalytics();
+      if (!$("#analytics-month").value) $("#analytics-month").value = state.analytics.period.date_to.slice(0, 7);
+    } catch (error) { toast(error.message, true); }
+  }
+
+  async function downloadMonthlyPdf() {
+    const month = $("#analytics-month").value;
+    if (!month) throw new Error("Оберіть місяць");
+    const response = await fetch(`/api/v1/analytics/monthly.pdf?month=${encodeURIComponent(month)}`, {
+      credentials: "same-origin",
+      headers: authHeaders(),
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.detail || "Не вдалося сформувати PDF");
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `personal-secretary-${month}.pdf`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   function bindEvents() {
     $$("[data-view]").forEach((button) => button.addEventListener("click", () => navigate(button.dataset.view)));
     ["delay_min_seconds", "delay_max_seconds", "bot_delay_seconds"].forEach((name) => {
@@ -396,6 +467,11 @@
     }));
     $("#log-filter").elements.action.innerHTML += actions.map((action) => `<option value="${action}">${escapeHtml(actionLabels[action] || action)}</option>`).join("");
     $("#log-filter").addEventListener("submit", (event) => { event.preventDefault(); loadLogs(); });
+    $("#analytics-filter").addEventListener("submit", (event) => { event.preventDefault(); loadAnalytics(); });
+    $("#download-monthly-pdf").addEventListener("click", (event) => withBusyButton(event.currentTarget, "Формуємо PDF…", async () => {
+      await downloadMonthlyPdf();
+      toast("PDF-звіт завантажено");
+    }));
     $$(".browser-link-action").forEach((button) => button.addEventListener("click", async () => { try { const result = await api("/api/v1/auth/browser-link", { method: "POST" }); await copyText(result.url); toast("Одноразове посилання скопійовано"); } catch (error) { toast(error.message, true); } }));
     $("#logout").addEventListener("click", async () => { await api("/api/v1/auth/logout", { method: "POST" }); location.reload(); });
   }

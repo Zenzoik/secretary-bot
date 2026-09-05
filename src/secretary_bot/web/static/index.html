@@ -9,9 +9,9 @@
     <meta property="og:description" content="Налаштування без зайвих кроків">
     <meta property="og:image" content="{{BASE_URL}}/assets/og.png">
     <title>Personal Secretary — налаштування</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260904-5">
+    <link rel="stylesheet" href="/assets/styles.css?v=20260905-1">
     <script src="https://telegram.org/js/telegram-web-app.js?59"></script>
-    <script src="/assets/app.js?v=20260904-5" defer></script>
+    <script src="/assets/app.js?v=20260905-1" defer></script>
   </head>
   <body>
     <div class="app-shell" id="app" aria-busy="true">
@@ -27,7 +27,8 @@
           <button data-view="templates"><span>04</span> Шаблони</button>
           <button data-view="classifier"><span>05</span> Класифікація</button>
           <button data-view="summary"><span>06</span> Самарі</button>
-          <button data-view="logs"><span>07</span> Журнал</button>
+          <button data-view="analytics"><span>07</span> Аналітика</button>
+          <button data-view="logs"><span>08</span> Журнал</button>
         </nav>
         <div class="sidebar-footer">
           <button class="text-button browser-link-action">Відкрити у браузері</button>
@@ -206,6 +207,32 @@
               </section>
               <div class="form-actions"><button class="primary" type="submit">Зберегти самарі</button></div>
             </form>
+          </section>
+
+          <section class="view" data-view-panel="analytics">
+            <div class="panel">
+              <div class="panel-heading">
+                <div><p class="eyebrow">Статистика за період</p><h2>Аналітика контактів</h2></div>
+                <span class="section-note" id="analytics-timezone"></span>
+              </div>
+              <form class="filter-bar analytics-filter" id="analytics-filter">
+                <label>Від<input name="date_from" type="date" required></label>
+                <label>До<input name="date_to" type="date" required></label>
+                <button class="secondary" type="submit">Показати</button>
+              </form>
+              <div class="analytics-totals" id="analytics-totals" aria-live="polite"></div>
+              <div class="table-wrap">
+                <table class="analytics-table">
+                  <thead><tr><th>Контакт</th><th>Повідомлення</th><th>Вхідні / вихідні</th><th>Звичайні</th><th>Платні</th><th>Сума</th><th>Напрямки</th><th>Питання задано / закрито</th></tr></thead>
+                  <tbody id="analytics-rows"></tbody>
+                </table>
+              </div>
+              <section class="pdf-export" aria-labelledby="pdf-export-title">
+                <div><strong id="pdf-export-title">Місячний PDF-звіт</strong><small>Містить усі контакти та ті самі перевірені показники. Для стабільного завантаження відкрийте панель у браузері.</small></div>
+                <label>Місяць<input id="analytics-month" type="month" required></label>
+                <button class="secondary" id="download-monthly-pdf" type="button">Завантажити PDF</button>
+              </section>
+            </div>
           </section>
 
           <section class="view" data-view-panel="logs">

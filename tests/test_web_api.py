@@ -4,11 +4,14 @@ import hashlib
 import hmac
 import json
 from datetime import UTC, datetime, time, timedelta
+from decimal import Decimal
+from io import BytesIO
 from urllib.parse import urlencode, urlparse
 
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from pypdf import PdfReader
 from sqlalchemy import func, select
 
 from secretary_bot import models
@@ -93,6 +96,182 @@ async def seed_owner(database: Database, *, user_id: int = 42, name: str = "Owne
             )
         )
         return connection.id
+
+
+@pytest.mark.asyncio
+async def test_three_day_analytics_and_monthly_pdf_include_all_contacts(
+    database: Database,
+) -> None:
+    connection_id = await seed_owner(database)
+    period_start = datetime(2026, 8, 31, 21, 0, tzinfo=UTC)  # 01.09 00:00 Kyiv
+    async with database.session() as session, session.begin():
+        session.add_all(
+            [
+                models.ContactActivity(
+                    connection_id=connection_id,
+                    contact_id=101,
+                    contact_name="Олена Клієнт",
+                    contact_username="olena",
+                ),
+                models.ContactActivity(
+                    connection_id=connection_id,
+                    contact_id=202,
+                    contact_name="Тарас Замовник",
+                ),
+                models.ContactActivity(
+                    connection_id=connection_id,
+                    contact_id=303,
+                    contact_name="Контакт без подій",
+                ),
+            ]
+        )
+        session.add_all(
+            [
+                models.MessageLog(
+                    connection_id=connection_id,
+                    contact_id=101,
+                    tg_message_id=1,
+                    direction="in",
+                    occurred_at=period_start + timedelta(hours=1),
+                    action=LogAction.REPLIED.value,
+                    category="general",
+                ),
+                models.MessageLog(
+                    connection_id=connection_id,
+                    contact_id=101,
+                    tg_message_id=2,
+                    direction="out",
+                    occurred_at=period_start + timedelta(days=1, hours=1),
+                    action=LogAction.REPLIED.value,
+                    category="money",
+                ),
+                models.MessageLog(
+                    connection_id=connection_id,
+                    contact_id=202,
+                    tg_message_id=3,
+                    direction="in",
+                    occurred_at=period_start + timedelta(days=2, hours=1),
+                    action=LogAction.DRY_RUN.value,
+                    category="money",
+                ),
+                models.MessageLog(
+                    connection_id=connection_id,
+                    contact_id=101,
+                    tg_message_id=4,
+                    direction="in",
+                    occurred_at=period_start + timedelta(hours=2),
+                    action=LogAction.CAPTURED.value,
+                    body_encrypted=b"not-an-analytics-event",
+                ),
+                models.MessageLog(
+                    connection_id=connection_id,
+                    contact_id=101,
+                    tg_message_id=5,
+                    direction="in",
+                    occurred_at=period_start - timedelta(seconds=1),
+                    action=LogAction.REPLIED.value,
+                    category="general",
+                ),
+            ]
+        )
+        request_deadline = period_start + timedelta(days=10)
+        session.add_all(
+            [
+                models.ContactRequest(
+                    connection_id=connection_id,
+                    contact_id=101,
+                    tg_message_id=11,
+                    category="general",
+                    occurred_at=period_start + timedelta(hours=1),
+                    status="normal",
+                    offer_expires_at=request_deadline,
+                ),
+                models.ContactRequest(
+                    connection_id=connection_id,
+                    contact_id=101,
+                    tg_message_id=12,
+                    category="money",
+                    occurred_at=period_start + timedelta(days=1, hours=1),
+                    status="paid",
+                    price_amount=Decimal("1250.50"),
+                    currency="UAH",
+                    offer_expires_at=request_deadline,
+                ),
+                models.ContactRequest(
+                    connection_id=connection_id,
+                    contact_id=202,
+                    tg_message_id=13,
+                    category="money",
+                    occurred_at=period_start + timedelta(days=2, hours=1),
+                    status="offered",
+                    offer_expires_at=request_deadline,
+                ),
+            ]
+        )
+        for index in range(3):
+            run = models.SummaryRun(
+                connection_id=connection_id,
+                period_start=period_start + timedelta(days=index),
+                period_end=period_start + timedelta(days=index + 1),
+                status="delivered",
+            )
+            session.add(run)
+            await session.flush()
+            session.add(
+                models.SummaryItem(
+                    run_id=run.id,
+                    contact_id=101,
+                    contact_name="Олена Клієнт",
+                    contact_username="olena",
+                    topic="Оплата",
+                    questions_asked=index + 1,
+                    questions_closed=index,
+                )
+            )
+
+    transport = ASGITransport(app=web_app(database))
+    async with AsyncClient(transport=transport, base_url="https://testserver") as client:
+        response = await client.get(
+            "/api/v1/analytics?date_from=2026-09-01&date_to=2026-09-03",
+            headers=headers(),
+        )
+        pdf_response = await client.get(
+            "/api/v1/analytics/monthly.pdf?month=2026-09",
+            headers=headers(),
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["period"]["started_at"] == "2026-08-31T21:00:00+00:00"
+    assert payload["totals"] == {
+        "contacts": 3,
+        "messages": 3,
+        "ordinary_requests": 2,
+        "paid_requests": 1,
+        "questions_asked": 6,
+        "questions_closed": 3,
+        "paid_amounts": {"UAH": "1250.50"},
+    }
+    by_id = {item["contact_id"]: item for item in payload["items"]}
+    assert by_id[101]["messages"] == 2
+    assert by_id[101]["message_directions"] == {"in": 1, "out": 1}
+    assert by_id[101]["ordinary_requests"] == 1
+    assert by_id[101]["paid_requests"] == 1
+    assert by_id[101]["request_categories"] == {"general": 1, "money": 1}
+    assert by_id[101]["questions_asked"] == 6
+    assert by_id[101]["questions_closed"] == 3
+    assert by_id[202]["ordinary_requests"] == 1
+    assert by_id[303]["messages"] == by_id[303]["requests_total"] == 0
+
+    assert pdf_response.status_code == 200
+    assert pdf_response.headers["content-type"] == "application/pdf"
+    assert "personal-secretary-2026-09.pdf" in pdf_response.headers["content-disposition"]
+    pdf_reader = PdfReader(BytesIO(pdf_response.content))
+    pdf_text = "\n".join(page.extract_text() or "" for page in pdf_reader.pages)
+    assert "Олена Клієнт" in pdf_text
+    assert "Тарас Замовник" in pdf_text
+    assert "Контакт без подій" in pdf_text
+    assert "1250.50 UAH" in pdf_text
 
 
 @pytest.mark.asyncio
