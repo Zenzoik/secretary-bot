@@ -378,7 +378,11 @@ class EscalationActions:
             )
 
     async def _answer(self, query: CallbackQuery, text: str, *, alert: bool = False) -> None:
-        await self.bot.answer_callback_query(query.id, text=text, show_alert=alert)
+        # Telegram accepts callback acknowledgements only for a short time. The
+        # business action may already be committed after a tunnel outage, so an
+        # expired toast must not prevent the durable card update below.
+        with contextlib.suppress(Exception):
+            await self.bot.answer_callback_query(query.id, text=text, show_alert=alert)
 
     async def _finalize_owner(self, query: CallbackQuery, note: str, toast: str) -> None:
         await self._answer(query, toast)

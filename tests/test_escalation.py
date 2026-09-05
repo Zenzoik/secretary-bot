@@ -21,6 +21,7 @@ class FakeBot:
         self.sent: list[dict[str, Any]] = []
         self.answered: list[dict[str, Any]] = []
         self.edited: list[dict[str, Any]] = []
+        self.callback_error = False
 
     async def send_message(self, **kwargs: Any) -> Any:
         self.sent.append(kwargs)
@@ -30,6 +31,8 @@ class FakeBot:
         return True
 
     async def answer_callback_query(self, callback_query_id: str, **kwargs: Any) -> bool:
+        if self.callback_error:
+            raise RuntimeError("callback expired")
         self.answered.append({"id": callback_query_id, **kwargs})
         return True
 
@@ -152,6 +155,7 @@ async def test_owner_decline_keeps_paid_count_and_sends_configured_text(database
     actions = EscalationActions(database, bot, BusinessReplySender(bot))
     await actions.handle_callback(callback("offer", request_id), now=NOW)
     await actions.handle_callback(callback("confirm", request_id), now=NOW)
+    bot.callback_error = True
 
     assert await actions.handle_callback(
         callback("decline", request_id, user_id=42), now=NOW
@@ -164,6 +168,7 @@ async def test_owner_decline_keeps_paid_count_and_sends_configured_text(database
     assert request.owner_decision == "declined"
     assert activity is not None and activity.paid_escalation_count == 1
     assert "немає можливості відповісти терміново" in bot.sent[-1]["text"]
+    assert bot.edited[-1]["reply_markup"] is None
 
 
 @pytest.mark.parametrize(
