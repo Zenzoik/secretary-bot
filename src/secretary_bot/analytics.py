@@ -322,7 +322,7 @@ def render_monthly_pdf(report: dict[str, Any], *, generated_at: datetime | None 
     details = Table(
         rows,
         repeatRows=1,
-        colWidths=[45 * mm, 25 * mm, 30 * mm, 25 * mm, 22 * mm, 32 * mm, 43 * mm, 35 * mm],
+        colWidths=[40 * mm, 30 * mm, 30 * mm, 25 * mm, 22 * mm, 32 * mm, 40 * mm, 34 * mm],
         hAlign="LEFT",
     )
     details.setStyle(_table_style(header_rows=1))
