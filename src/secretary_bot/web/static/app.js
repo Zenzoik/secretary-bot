@@ -396,6 +396,10 @@
 
   // The selected card is kept as its own snapshot: a later search may drop it
   // from the visible list, and discarding edits must still restore it.
+  function renderContactMeta(contact) {
+    $("#contact-meta").textContent = `Останнє повідомлення: ${formatDate(contact.last_incoming_at)}. Дата паузи — у часовому поясі пристрою: ${Intl.DateTimeFormat().resolvedOptions().timeZone}. Розклад — ${state.bootstrap.schedule.timezone}.`;
+  }
+
   function fillContactForm(contact) {
     const form = $("#contact-form");
     setDirty(form, false);
@@ -403,7 +407,7 @@
     $("#contact-empty").classList.add("hidden");
     $("#contact-fields").classList.remove("hidden");
     $("#contact-title").textContent = contactName(contact);
-    $("#contact-meta").textContent = `Останнє повідомлення: ${formatDate(contact.last_incoming_at)}. Дата паузи — у часовому поясі пристрою: ${Intl.DateTimeFormat().resolvedOptions().timeZone}. Розклад — ${state.bootstrap.schedule.timezone}.`;
+    renderContactMeta(contact);
     $(`input[name=exclusion][value=${contact.exclusion}]`, form).checked = true;
     form.dataset.exclusionOriginal = contact.exclusion_until || "";
     form.elements.exclusion_until.value = contact.exclusion_until ? ui.localDateTime(contact.exclusion_until) : "";
@@ -595,6 +599,10 @@
       const windows = windowsPayload($("#schedule-windows"));
       if (!windows.length) throw new Error("Додайте хоча б одне вікно");
       state.bootstrap.schedule = await api("/api/v1/schedule", { method: "PUT", body: JSON.stringify({ timezone: event.currentTarget.elements.timezone.value, windows }) });
+      if (state.selectedContact) {
+        renderContactMeta(state.selectedContact);
+        renderContactScheduleEditor();
+      }
       await refreshStatus();
     }); });
     let searchTimer;

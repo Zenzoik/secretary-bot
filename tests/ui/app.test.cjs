@@ -158,3 +158,35 @@ test('R7: an untouched exclusion keeps its instant across the repeated autumn ho
     if(ui.resolveDateTime('', original)!==null) throw Error('empty field must clear the date');`;
   execFileSync(process.execPath,['-e',code],{env:{...process.env,TZ:'Europe/Prague'}});
 });
+
+test('saving the global schedule refreshes the open contact without losing its draft', async t => {
+  const w = await screen(t, {handler: (path, options) => {
+    if (path === '/api/v1/schedule') return response(JSON.parse(options.body));
+    if (path.startsWith('/api/v1/contacts')) return response({items:[contact(100)],has_more:false});
+  }});
+  const d = w.document;
+  d.querySelector('[data-view=contacts]').click(); await tick();
+  d.querySelector('[data-contact-id="100"]').click();
+  const contactForm = d.querySelector('#contact-form');
+  contactForm.elements.exclusion.value = 'forever';
+  contactForm.dispatchEvent(new w.Event('input', {bubbles:true}));
+  const saveSchedule = async start => {
+    d.querySelector('#schedule-windows .time-from').value = start;
+    d.querySelector('#timezone-select').value = 'Europe/Prague';
+    d.querySelector('#schedule-form').dispatchEvent(new w.Event('submit', {bubbles:true,cancelable:true}));
+    await tick(); await tick();
+  };
+  await saveSchedule('21:15');
+  assert.match(d.querySelector('#contact-schedule-preview').textContent, /21:15/);
+  assert.match(d.querySelector('#contact-meta').textContent, /Розклад — Europe\/Prague/);
+  assert.equal(contactForm.elements.exclusion.value, 'forever');
+  assert.equal(contactForm.dataset.dirty, 'true');
+  d.querySelector('#add-contact-window').click();
+  const personalStart = d.querySelector('#contact-windows .time-from');
+  personalStart.value = '13:30';
+  await saveSchedule('23:00');
+  assert.equal(personalStart.isConnected, true);
+  assert.equal(personalStart.value, '13:30');
+  assert.equal(contactForm.dataset.dirty, 'true');
+  assert.equal(d.querySelector('#contact-schedule-preview').classList.contains('hidden'), true);
+});
