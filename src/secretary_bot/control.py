@@ -943,13 +943,14 @@ def _scope_keyboard() -> ReplyKeyboardMarkup:
 def _main_keyboard(
     connection: ConnectionRecord, *, now: datetime, is_master: bool = False
 ) -> ReplyKeyboardMarkup:
-    muted_until = connection.policy.muted_until
-    stopped = connection.policy.kill_switch or (muted_until is not None and now < muted_until)
-    power_button = BUTTON_ON if stopped else BUTTON_OFF
+    # Telegram keeps a reply keyboard on the client until the bot sends a new one, so
+    # a label that names the next state goes stale after any change made elsewhere.
+    # Every label here reads the same whatever the bot is doing. Stopping stays one
+    # tap away because it is urgent and safe to repeat; resuming and switching to live
+    # replies belong in the panel, which always shows the current state.
     rows = [
         [KeyboardButton(text=BUTTON_STATUS), KeyboardButton(text=BUTTON_TODAY)],
-        [KeyboardButton(text=power_button), KeyboardButton(text=BUTTON_MUTE)],
-        [KeyboardButton(text=BUTTON_LIVE if connection.dry_run else ui.BUTTON_DRY_RUN)],
+        [KeyboardButton(text=BUTTON_OFF)],
         [KeyboardButton(text=BUTTON_SEND_BOT)],
     ]
     return ReplyKeyboardMarkup(

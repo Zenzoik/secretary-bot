@@ -145,8 +145,9 @@ async def test_off_status_and_on_change_the_persistent_gate(database: Database) 
         assert connection is not None
         assert connection.policy.kill_switch is True
     assert "вимкнено" in bot.sent[-1]["text"]
-    assert BUTTON_ON in keyboard_texts(bot.sent[-1])
-    assert BUTTON_OFF not in keyboard_texts(bot.sent[-1])
+    # A client keeps the last keyboard it was sent, so no label may name the state.
+    stopped_keyboard = keyboard_texts(bot.sent[-1])
+    assert BUTTON_ON not in stopped_keyboard
 
     assert await control.handle_message(owner_message("/on"), now=NOW)
     async with database.session() as session:
@@ -154,8 +155,7 @@ async def test_off_status_and_on_change_the_persistent_gate(database: Database) 
         assert connection is not None
         assert connection.policy.kill_switch is False
         assert connection.policy.muted_until is None
-    assert BUTTON_OFF in keyboard_texts(bot.sent[-1])
-    assert BUTTON_ON not in keyboard_texts(bot.sent[-1])
+    assert keyboard_texts(bot.sent[-1]) == stopped_keyboard
 
 
 @pytest.mark.asyncio
@@ -171,8 +171,6 @@ async def test_start_opens_the_button_control_panel(database: Database) -> None:
         BUTTON_STATUS,
         BUTTON_TODAY,
         BUTTON_OFF,
-        BUTTON_MUTE,
-        BUTTON_LIVE,
         BUTTON_SEND_BOT,
     ]
     assert bot.menu_buttons[0]["chat_id"] == 42
@@ -311,7 +309,8 @@ async def test_onboarding_fsm_persists_and_finishes_in_safe_dry_run(
     assert connection.dry_run is True
     assert connection.policy.kill_switch is False
     assert BUTTON_USERS not in keyboard_texts(bot.sent[-1])
-    assert BUTTON_LIVE in keyboard_texts(bot.sent[-1])
+    # Going live is a panel decision, so onboarding cannot end one tap away from it.
+    assert BUTTON_LIVE not in keyboard_texts(bot.sent[-1])
 
 
 @pytest.mark.asyncio
@@ -425,7 +424,7 @@ async def test_mute_keyboard_state_persists_between_handlers(database: Database)
         assert connection is not None
         assert connection.control_state == "main"
         assert connection.policy.muted_until == NOW + timedelta(hours=3)
-    assert BUTTON_ON in keyboard_texts(bot.sent[-1])
+    assert BUTTON_OFF in keyboard_texts(bot.sent[-1])
 
 
 @pytest.mark.asyncio
