@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Protocol
 
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import update
 
@@ -25,6 +26,8 @@ class EscalationBot(Protocol):
     async def edit_message_reply_markup(self, **kwargs: Any) -> Any: ...
 
     async def edit_message_text(self, **kwargs: Any) -> Any: ...
+
+    async def delete_business_messages(self, **kwargs: Any) -> Any: ...
 
     async def get_chat(self, chat_id: int | str) -> Any: ...
 
@@ -149,7 +152,8 @@ class EscalationActions:
             chat_id=contact_id,
             text=as_bot_reply(
                 f"{offer_text}\n\nВартість: {_price(amount, currency)}. "
-                "Підтвердіть платне звернення."
+                "Відповідь не гарантована. Після підтвердження суму буде включено "
+                "до рахунку наприкінці місяця.\n\nПідтвердіть платне звернення."
             ),
             reply_markup=escalation_confirmation_keyboard(
                 request_id, amount=amount, currency=currency
@@ -283,12 +287,70 @@ class EscalationActions:
             connection = await session.get(models.Connection, request.connection_id)
             if connection is None:
                 return False
-            if request.status == "offered" and request.offer_expires_at > now:
-                request.status = "normal"
-                request.price_amount = None
-                request.currency = None
+            if request.status == "paid":
+                await self._answer(query, "Платне звернення вже підтверджено.")
+                return True
+            # Conditional update cannot undo a concurrent payment confirmation.
+            changed = await session.scalar(
+                update(models.ContactRequest)
+                .where(
+                    models.ContactRequest.id == request_id,
+                    models.ContactRequest.status == "offered",
+                )
+                .values(status="normal", price_amount=None, currency=None)
+                .returning(models.ContactRequest.id)
+            )
+            if changed is None and request.status != "normal":
+                await self._answer(query, "Звернення вже оброблено.")
+                return True
             business_connection_id = connection.business_connection_id
-        await self._clear_keyboard(query, business_connection_id)
+            original_message_id = request.bot_reply_message_id
+            contact_id = request.contact_id
+            can_reopen = (
+                request.offer_expires_at > now
+                and connection.escalation_enabled
+                and connection.escalation_price_amount > 0
+            )
+        keyboard = escalation_offer_keyboard(request_id) if can_reopen else None
+        restored = False
+        if original_message_id is not None:
+            try:
+                await self.bot.edit_message_reply_markup(
+                    business_connection_id=business_connection_id,
+                    chat_id=contact_id,
+                    message_id=original_message_id,
+                    reply_markup=keyboard,
+                )
+                restored = True
+            except TelegramBadRequest as error:
+                # An earlier cancellation may already have restored this button.
+                restored = "message is not modified" in error.message.lower()
+            except Exception:
+                pass
+        if query.message is not None:
+            if restored:
+                try:
+                    await self.bot.delete_business_messages(
+                        business_connection_id=business_connection_id,
+                        message_ids=[query.message.message_id],
+                    )
+                except Exception:
+                    pass
+                else:
+                    await self._answer(query, "Скасовано. Платне звернення не створено.")
+                    return True
+            # If Telegram denies deletion or the original message is unavailable,
+            # leave a useful cancelled card, never an active confirmation button.
+            try:
+                await self.bot.edit_message_text(
+                    business_connection_id=business_connection_id,
+                    chat_id=contact_id,
+                    message_id=query.message.message_id,
+                    text=as_bot_reply("Скасовано. Платне звернення не створено."),
+                    reply_markup=None if restored else keyboard,
+                )
+            except Exception:
+                await self._clear_keyboard(query, business_connection_id)
         await self._answer(query, "Платне звернення не створено.")
         return True
 

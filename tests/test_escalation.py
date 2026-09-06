@@ -112,6 +112,8 @@ async def test_explicit_confirmation_counts_paid_request_once(database) -> None:
     actions = EscalationActions(database, bot, BusinessReplySender(bot))
 
     assert await actions.handle_callback(callback("offer", request_id), now=NOW)
+    assert "Відповідь не гарантована" in bot.sent[0]["text"]
+    assert "до рахунку наприкінці місяця" in bot.sent[0]["text"]
     async with database.session() as session:
         request = await session.get(models.ContactRequest, request_id)
         activity = await session.get(models.ContactActivity, (1, CONTACT_ID))
@@ -190,3 +192,77 @@ async def test_owner_decline_keeps_paid_count_and_sends_configured_text(database
 )
 def test_callback_parser(data: str, expected: tuple[str, int] | None) -> None:
     assert parse_escalation_callback(data) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delete_fails", [False, True])
+@pytest.mark.parametrize("already_restored", [False, True])
+async def test_cancel_restores_urgent_button_and_allows_reopening(
+    database, delete_fails, already_restored
+) -> None:
+    request_id = await seed_request(database)
+    async with database.session() as session, session.begin():
+        request = await session.get(models.ContactRequest, request_id)
+        request.bot_reply_message_id = 49
+    bot = FakeBot()
+    deleted = []
+
+    async def delete_business_messages(**kwargs):
+        if delete_fails:
+            raise RuntimeError("deletion forbidden")
+        deleted.append(kwargs)
+
+    bot.delete_business_messages = delete_business_messages
+    if already_restored:
+        from aiogram.exceptions import TelegramBadRequest
+        from aiogram.methods import EditMessageReplyMarkup
+
+        original_edit = bot.edit_message_reply_markup
+
+        async def edit_message_reply_markup(**kwargs):
+            await original_edit(**kwargs)
+            if kwargs["message_id"] == 49:
+                raise TelegramBadRequest(
+                    method=EditMessageReplyMarkup(**kwargs),
+                    message="Bad Request: message is not modified",
+                )
+
+        bot.edit_message_reply_markup = edit_message_reply_markup
+    actions = EscalationActions(database, bot, BusinessReplySender(bot))
+    await actions.handle_callback(callback("offer", request_id), now=NOW)
+    await actions.handle_callback(callback("cancel", request_id), now=NOW)
+    restored = next(edit for edit in bot.edited if edit["message_id"] == 49)
+    assert restored["reply_markup"].inline_keyboard[0][0].callback_data == (
+        f"escalation:offer:{request_id}"
+    )
+    if delete_fails:
+        assert "Скасовано" in bot.edited[-1]["text"]
+        assert bot.edited[-1]["reply_markup"] is None
+    else:
+        assert deleted == [{"business_connection_id": "connection-1", "message_ids": [50]}]
+    async with database.session() as session:
+        request = await session.get(models.ContactRequest, request_id)
+        assert request.status == "normal"
+        assert request.price_amount is None
+        activity = await session.get(models.ContactActivity, (1, CONTACT_ID))
+        assert activity.paid_escalation_count == 0
+    await actions.handle_callback(callback("offer", request_id), now=NOW)
+    assert len(bot.sent) == 2
+    async with database.session() as session:
+        request = await session.get(models.ContactRequest, request_id)
+        assert request.status == "offered"
+
+
+@pytest.mark.asyncio
+async def test_cancel_cannot_undo_confirmed_payment(database) -> None:
+    request_id = await seed_request(database)
+    bot = FakeBot()
+    actions = EscalationActions(database, bot, BusinessReplySender(bot))
+    await actions.handle_callback(callback("offer", request_id), now=NOW)
+    await actions.handle_callback(callback("confirm", request_id), now=NOW)
+    edits_before = len(bot.edited)
+    await actions.handle_callback(callback("cancel", request_id), now=NOW)
+    assert len(bot.edited) == edits_before
+    async with database.session() as session:
+        request = await session.get(models.ContactRequest, request_id)
+        assert request.status == "paid"
