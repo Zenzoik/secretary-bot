@@ -32,6 +32,7 @@ from secretary_bot.texts import (
     FEEDBACK_RESULTS,
     READ_PERMISSION_LOST_ALERT,
     REPLY_PERMISSION_LOST_ALERT,
+    REPLY_PERMISSION_RESTORED_ALERT,
 )
 
 logger = logging.getLogger(__name__)
@@ -243,6 +244,15 @@ async def _store_connection(
             cancel_connection_id = record.id
             if record.owner_chat_id is not None:
                 alert = (record.owner_chat_id, REPLY_PERMISSION_LOST_ALERT)
+        elif (
+            # Losing the right stops the bot on purpose, and getting it back does not
+            # restart it. Without this the owner sees a working connection and silence.
+            record.policy.kill_switch
+            and previous is not None
+            and not previous.rights.get("can_reply", False)
+            and record.owner_chat_id is not None
+        ):
+            alert = (record.owner_chat_id, REPLY_PERMISSION_RESTORED_ALERT)
         elif (
             record.mark_read
             and not rights.get("can_read_messages", False)

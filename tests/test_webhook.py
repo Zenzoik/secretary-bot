@@ -395,6 +395,33 @@ def test_connection_or_reply_permission_loss_fails_closed(
     assert alert_fragment in client.app.state.test_notifier.alerts[-1][1]
 
 
+def test_restored_reply_permission_says_the_bot_is_still_stopped(world) -> None:
+    """Getting the right back leaves the kill switch on, which looks like silence."""
+    client, _, _, database = world
+    revoked = {
+        "update_id": 30,
+        "business_connection": {
+            **CONNECTION_UPDATE["business_connection"],
+            "rights": {"can_read_messages": True},
+        },
+    }
+    restored = {"update_id": 31, "business_connection": CONNECTION_UPDATE["business_connection"]}
+
+    with client:
+        assert post_update(client, CONNECTION_UPDATE).status_code == 200
+        wait_for(lambda: client.app.state.runtime.processed_updates == 1)
+        assert post_update(client, revoked).status_code == 200
+        wait_for(lambda: client.app.state.runtime.processed_updates == 2)
+        assert post_update(client, restored).status_code == 200
+        wait_for(lambda: client.app.state.runtime.processed_updates == 3)
+
+    connection = asyncio.run(_first(database, models.Connection))
+    assert connection is not None
+    assert connection.is_active is True
+    assert connection.kill_switch is True
+    assert "досі зупинені" in client.app.state.test_notifier.alerts[-1][1]
+
+
 def test_read_permission_loss_does_not_stop_replies(world) -> None:
     client, _, queue, database = world
     readable = {
