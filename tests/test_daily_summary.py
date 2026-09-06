@@ -219,6 +219,80 @@ async def test_daily_summary_sends_active_dialogue_once_and_persists_items(datab
 
 
 @pytest.mark.asyncio
+async def test_timezone_change_does_not_resend_hours_already_summarised(database) -> None:
+    cipher = MessageCipher.from_encoded_key(MessageCipher.generate_encoded_key())
+    async with database.session() as session, session.begin():
+        connection = await upsert_connection(
+            session,
+            ConnectionSnapshot(
+                business_connection_id="tz-shift",
+                owner_user_id=42,
+                owner_chat_id=42,
+                rights={"can_reply": True},
+            ),
+        )
+        row = await session.get(models.Connection, connection.id)
+        assert row is not None
+        row.message_retention_enabled = True
+        row.summary_time = time(12, 0)
+        session.add(
+            models.ContactActivity(
+                connection_id=connection.id,
+                contact_id=100,
+                contact_name="Клієнт",
+                contact_username="client_test",
+            )
+        )
+        await seed_message(
+            session,
+            cipher,
+            connection_id=connection.id,
+            contact_id=100,
+            message_id=10,
+            direction="in",
+            text="Питання до межі",
+            occurred_at=SCHEDULED - timedelta(hours=1),
+        )
+
+    bot = FakeBot()
+    model = FakeModel()
+    digest = DailySummary(
+        database=database,
+        bot=bot,
+        cipher=cipher,
+        model=model,
+        classifier_defaults=ClassifierSettings(),
+    )
+    assert await digest.run_once(now=NOW) == 1
+    delivered_messages = len(bot.sent)
+
+    # Europe/Prague keeps the 12:00 release but moves its UTC boundary an hour later.
+    async with database.session() as session, session.begin():
+        row = await session.scalar(select(models.Connection))
+        assert row is not None
+        row.timezone = "Europe/Prague"
+
+    assert await digest.run_once(now=NOW + timedelta(minutes=10)) == 0
+    assert len(bot.sent) == delivered_messages
+
+    async with database.session() as session, session.begin():
+        await seed_message(
+            session,
+            cipher,
+            connection_id=1,
+            contact_id=100,
+            message_id=11,
+            direction="in",
+            text="Питання після межі",
+            occurred_at=SCHEDULED + timedelta(minutes=30),
+        )
+
+    assert await digest.run_once(now=SCHEDULED + timedelta(hours=1, minutes=5)) == 1
+    assert "Питання до межі" not in model.transcripts[-1]
+    assert "Питання після межі" in model.transcripts[-1]
+
+
+@pytest.mark.asyncio
 async def test_summary_period_obeys_local_time_and_connection_state(database) -> None:
     async with database.session() as session, session.begin():
         await upsert_connection(

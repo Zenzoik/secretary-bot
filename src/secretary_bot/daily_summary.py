@@ -103,6 +103,14 @@ class DailySummary:
                 # Recover a missed interval before proceeding to the newest day.
                 # A long outage becomes one explicitly incomplete catch-up report.
                 period = last.period_end, period[0]
+            elif last is not None and last.period_end >= period[1]:
+                # Changing the timezone moves the daily boundary. Everything up to
+                # the new boundary was already reported, so nothing is left to send.
+                continue
+            elif last is not None and last.period_end > period[0]:
+                # The boundary moved forward: report only the hours the delivered
+                # summary did not cover, instead of the same day a second time.
+                period = last.period_end, period[1]
             try:
                 completed = await self._process(
                     connection,
