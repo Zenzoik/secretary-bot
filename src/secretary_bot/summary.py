@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
 
-SUMMARY_OUTPUT_TOKENS = 1024
+# A reasoning model spends this budget on reasoning before it writes any JSON,
+# so a ceiling sized for the answer alone returns an empty response instead.
+SUMMARY_OUTPUT_TOKENS = 8192
 MAX_DIALOGUE_MESSAGES = 200
 MAX_TRANSCRIPT_CHARS = 60_000
 
@@ -110,7 +112,7 @@ async def summarize_dialogue(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
-        raise SummaryError(f"summary model unavailable: {type(exc).__name__}") from exc
+        raise SummaryError(f"summary model unavailable: {type(exc).__name__}: {exc}") from exc
     return parse_summary(raw)
 
 

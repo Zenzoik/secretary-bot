@@ -114,11 +114,14 @@ class DailySummary:
                 delivered += int(completed)
             except Exception as exc:
                 logger.error(
-                    "daily summary failed: connection_id=%s error=%s",
+                    "daily summary failed: connection_id=%s error=%s: %s",
                     connection.id,
                     type(exc).__name__,
+                    exc,
                 )
-                await self._mark_error(connection.id, period[0], period[1], type(exc).__name__)
+                await self._mark_error(
+                    connection.id, period[0], period[1], f"{type(exc).__name__}: {exc}"
+                )
         return delivered
 
     async def _process(

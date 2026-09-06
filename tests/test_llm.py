@@ -14,11 +14,17 @@ from secretary_bot.summary import SUMMARY_SCHEMA
 @dataclass
 class FakeResponses:
     output_text: str
+    status: str = "completed"
+    incomplete_details: SimpleNamespace | None = None
     calls: list[dict[str, Any]] = field(default_factory=list)
 
     async def create(self, **kwargs: Any) -> SimpleNamespace:
         self.calls.append(kwargs)
-        return SimpleNamespace(output_text=self.output_text)
+        return SimpleNamespace(
+            output_text=self.output_text,
+            status=self.status,
+            incomplete_details=self.incomplete_details,
+        )
 
 
 @dataclass
@@ -81,3 +87,19 @@ async def test_openai_empty_output_is_an_error() -> None:
 
     with pytest.raises(ValueError, match="no output text"):
         await model.classify("hello", system_prompt="classify", model="gpt-5-mini")
+
+
+@pytest.mark.asyncio
+async def test_openai_exhausted_output_budget_names_the_reason() -> None:
+    """A reasoning model can burn the whole ceiling and return no answer."""
+    responses = FakeResponses(
+        "",
+        status="incomplete",
+        incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+    )
+    model = OpenAILanguageModel(client=FakeClient(responses))  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="max_output_tokens"):
+        await model.summarize_dialogue(
+            "IN: hello", system_prompt="summarize", model="gpt-5-mini"
+        )

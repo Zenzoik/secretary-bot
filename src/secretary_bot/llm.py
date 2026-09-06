@@ -114,7 +114,11 @@ class OpenAILanguageModel:
             store=False,
         )
         if not response.output_text:
-            raise ValueError("OpenAI response has no output text")
+            details = response.incomplete_details
+            raise ValueError(
+                "OpenAI response has no output text: "
+                f"status={response.status}, reason={details.reason if details else None}"
+            )
         return response.output_text
 
     def _model(self, configured_model: str) -> str:
