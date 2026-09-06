@@ -73,7 +73,9 @@ button, label, input, select, textarea { -webkit-tap-highlight-color: transparen
 .effective-schedule span { color: var(--muted); font-size: 12px; }
 .effective-schedule b { color: var(--text); font-weight: 600; }
 
-.status-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
+/* Sits between a panel and a paragraph, so it carries the gap on both sides:
+   the panel spacing rule only applies between two adjacent panels. */
+.status-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 18px 0; }
 .status-card { min-height: 116px; padding: 18px; border: 1px solid var(--border); border-radius: 15px; background: var(--surface); }
 .status-card small { display: block; color: var(--muted); font-size: 11px; margin-bottom: 16px; }
 .status-card strong { display: block; font-size: 19px; letter-spacing: -.02em; }
@@ -86,6 +88,11 @@ input, select, textarea { width: 100%; border: 1px solid var(--border-strong); b
 textarea { resize: vertical; line-height: 1.55; }
 input:focus, select:focus, textarea:focus { border-color: rgba(255, 150, 63, .65); box-shadow: 0 0 0 3px rgba(255, 150, 63, .09); }
 input[type="checkbox"], input[type="radio"] { width: auto; }
+/* iOS zooms into any focused field smaller than 16px and never zooms back out,
+   leaving the panel magnified after the keyboard closes. Labels stay small. */
+@media (pointer: coarse) {
+  input, select, textarea { font-size: 16px; }
+}
 .form-grid { display: grid; gap: 14px; margin-top: 20px; }
 .form-grid.two { grid-template-columns: repeat(2, 1fr); }
 .form-grid.three { grid-template-columns: repeat(3, 1fr); }
@@ -225,6 +232,9 @@ tbody tr:last-child td { border-bottom: 0; }
   .topbar h1 { font-size: 28px; }
   .connection-pill { flex: 0 0 auto; padding: 7px 9px; }
   .view, .panel, form, label, input, select, textarea { min-width: 0; max-width: 100%; }
+  /* iOS sizes date and time fields from their own shadow content, so they ignore
+     the column they sit in and push the panel wider than the screen. */
+  input[type="date"], input[type="time"], input[type="datetime-local"] { -webkit-appearance: none; appearance: none; }
   .panel { width: 100%; padding: 16px 14px; border-radius: 15px; }
   .panel-heading { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-bottom: 20px; }
   .panel-heading .search { width: 100%; }

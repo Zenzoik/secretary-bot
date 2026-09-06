@@ -12,6 +12,7 @@ async function screen(t, {status=200, theme='dark', handler, data=structuredClon
   const w = dom.window;
   w.matchMedia = () => ({matches:theme==='light'});
   w.HTMLElement.prototype.scrollIntoView = ()=>{};
+  w.scrollTo = ()=>{};
   w.confirm = ()=>true;
   w.fetch = async (path, options) => {
     if (handler) { const value = await handler(path, options); if (value) return value; }

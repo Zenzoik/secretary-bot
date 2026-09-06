@@ -173,6 +173,9 @@
     $("#page-title").textContent = titles[view];
     history.replaceState(null, "", `#${view}`);
     $(`[data-view="${view}"]`)?.scrollIntoView({ block: "nearest", inline: "center" });
+    // The mobile navigation is pinned to the top, so a kept scroll offset would
+    // open the next view with its heading already hidden underneath the tabs.
+    window.scrollTo({ top: 0 });
     if (view === "contacts") loadContacts();
     if (view === "analytics") loadAnalytics();
     if (view === "logs") loadLogs();
