@@ -59,9 +59,14 @@
     toast.timer = setTimeout(() => node.classList.remove("show"), 3000);
   }
 
+  // Every time in the panel is the bot's own clock: the owner needs to read the
+  // log against the schedule that produced it, not against the device timezone.
   function formatDate(value) {
     if (!value) return "—";
-    return new Intl.DateTimeFormat("uk-UA", { dateStyle: "short", timeStyle: "short" }).format(new Date(value));
+    return new Intl.DateTimeFormat("uk-UA", {
+      dateStyle: "short", timeStyle: "short",
+      timeZone: state.bootstrap?.schedule?.timezone || undefined,
+    }).format(new Date(value));
   }
 
   function escapeHtml(value) {
@@ -397,7 +402,7 @@
   // The selected card is kept as its own snapshot: a later search may drop it
   // from the visible list, and discarding edits must still restore it.
   function renderContactMeta(contact) {
-    $("#contact-meta").textContent = `Останнє повідомлення: ${formatDate(contact.last_incoming_at)}. Дата паузи — у часовому поясі пристрою: ${Intl.DateTimeFormat().resolvedOptions().timeZone}. Розклад — ${state.bootstrap.schedule.timezone}.`;
+    $("#contact-meta").textContent = `Останнє повідомлення: ${formatDate(contact.last_incoming_at)}. Дата паузи та розклад — у часовому поясі бота: ${state.bootstrap.schedule.timezone}.`;
   }
 
   function fillContactForm(contact) {
@@ -410,7 +415,9 @@
     renderContactMeta(contact);
     $(`input[name=exclusion][value=${contact.exclusion}]`, form).checked = true;
     form.dataset.exclusionOriginal = contact.exclusion_until || "";
-    form.elements.exclusion_until.value = contact.exclusion_until ? ui.localDateTime(contact.exclusion_until) : "";
+    form.elements.exclusion_until.value = contact.exclusion_until
+      ? ui.zonedDateTime(contact.exclusion_until, state.bootstrap.schedule.timezone)
+      : "";
     const windows = $("#contact-windows");
     windows.innerHTML = "";
     contact.windows.forEach((window) => createWindow(windows, window));
@@ -437,6 +444,7 @@
       params.set("offset", append ? state.logOffset || 0 : 0);
       const result = await api(`/api/v1/logs?${params}`);
       state.logOffset = result.next_offset;
+      $("#log-timezone").textContent = `Час у поясі бота: ${state.bootstrap.schedule.timezone}`;
       $("#more-logs").classList.toggle("hidden", !result.has_more);
       const rows = result.items.length ? result.items.map((row) => `<tr><td>${formatDate(row.occurred_at)}</td><td>${escapeHtml(row.contact_label)}</td><td>${escapeHtml(actionLabels[row.action] || row.action)}</td><td>${escapeHtml(categoryLabels[row.category] || "—")}</td><td>${escapeHtml(errorLabels[row.error_code] || row.error_code || templateLabels[row.template_code] || "—")}</td></tr>`).join("") : '<tr><td class="empty-row" colspan="5">За вибраними фільтрами записів немає.</td></tr>';
       if (append) $("#log-rows").insertAdjacentHTML("beforeend", rows); else $("#log-rows").innerHTML = rows;
@@ -628,7 +636,7 @@
       const form = event.currentTarget;
       const exclusion = form.elements.exclusion.value;
       const rawUntil = form.elements.exclusion_until.value;
-      const saved = await api(`/api/v1/contacts/${state.selectedContact.contact_id}`, { method: "PUT", body: JSON.stringify({ exclusion, exclusion_until: exclusion === "until" ? ui.resolveDateTime(rawUntil, form.dataset.exclusionOriginal || null) : null, windows: windowsPayload($("#contact-windows")) }) });
+      const saved = await api(`/api/v1/contacts/${state.selectedContact.contact_id}`, { method: "PUT", body: JSON.stringify({ exclusion, exclusion_until: exclusion === "until" ? ui.resolveDateTime(rawUntil, form.dataset.exclusionOriginal || null, state.bootstrap.schedule.timezone) : null, windows: windowsPayload($("#contact-windows")) }) });
       const index = state.contacts.findIndex((item) => item.contact_id === saved.contact_id);
       if (index >= 0) state.contacts[index] = saved;
       state.selectedContact = saved;

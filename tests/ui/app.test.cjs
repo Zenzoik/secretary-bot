@@ -88,10 +88,28 @@ test('light theme is explicitly selected',async t=>{
   const w=await screen(t,{theme:'light'});
   assert.equal(w.document.documentElement.dataset.theme,'light');
 });
-test('date round-trip respects device timezone across summer and winter',()=>{
-  for(const tz of ['UTC','Europe/Prague','Europe/Kyiv']) {
-    const code=`const ui=require('./${staticRoot}ui-utils.js'); for(const v of ['2026-09-06T18:00:00.000Z','2026-01-06T18:00:00.000Z','2026-03-29T04:30:00.000Z']) if(ui.utcDateTime(ui.localDateTime(v))!==v) throw Error(v);`;
-    execFileSync(process.execPath,['-e',code],{env:{...process.env,TZ:tz}});
+test('the action log is timestamped in the bot timezone and says so',async t=>{
+  const data=structuredClone(base); data.schedule.timezone='Pacific/Auckland';
+  const occurred='2026-09-06T19:16:09.000Z';
+  const w=await screen(t,{data,handler:path=>{
+    if(path.startsWith('/api/v1/contacts')) return response({items:[contact(100)],has_more:false,next_offset:1});
+    if(path.startsWith('/api/v1/logs')) return response({items:[{occurred_at:occurred,contact_label:'@poldotk',
+      action:'skipped_window_limit',category:null,error_code:null,template_code:null}],has_more:false,next_offset:1});
+  }});
+  w.document.querySelector('[data-view=logs]').click(); await tick(); await tick();
+  const expected=new Intl.DateTimeFormat('uk-UA',{dateStyle:'short',timeStyle:'short',timeZone:'Pacific/Auckland'}).format(new Date(occurred));
+  assert.equal(w.document.querySelector('#log-rows td').textContent,expected);
+  assert.match(w.document.querySelector('#log-timezone').textContent,/Pacific\/Auckland/);
+});
+test('date round-trip uses the bot timezone whatever the device is set to',()=>{
+  for(const device of ['UTC','Europe/Prague','Pacific/Auckland']) {
+    const code=`const ui=require('./${staticRoot}ui-utils.js');
+      for(const v of ['2026-09-06T18:00:00.000Z','2026-01-06T18:00:00.000Z','2026-03-29T04:30:00.000Z'])
+        if(ui.utcDateTime(ui.zonedDateTime(v,'Europe/Kyiv'),'Europe/Kyiv')!==v) throw Error(v);
+      // Kyiv is three hours ahead of UTC in September, and the field must say so
+      // no matter where the owner's device is.
+      if(ui.zonedDateTime('2026-09-06T18:00:00.000Z','Europe/Kyiv')!=='2026-09-06T21:00') throw Error('wrong wall clock');`;
+    execFileSync(process.execPath,['-e',code],{env:{...process.env,TZ:device}});
   }
 });
 
@@ -151,12 +169,12 @@ test('R5: every colour outside theme variables comes from a variable',()=>{
   assert.match(readFileSync(staticRoot+'styles.css','utf8'),/label \{[^}]*color: var\(--label\)/);
 });
 test('R7: an untouched exclusion keeps its instant across the repeated autumn hour',()=>{
-  const code=`const ui=require('./${staticRoot}ui-utils.js');
-    const original='2026-10-25T01:30:00.000Z'; const field=ui.localDateTime(original);
-    const kept=ui.resolveDateTime(field, original); if(kept!==original) throw Error('unchanged field lost its instant: '+kept);
-    const changed=ui.resolveDateTime('2026-10-25T03:30', original); if(changed!=='2026-10-25T02:30:00.000Z') throw Error('changed field: '+changed);
-    if(ui.resolveDateTime('', original)!==null) throw Error('empty field must clear the date');`;
-  execFileSync(process.execPath,['-e',code],{env:{...process.env,TZ:'Europe/Prague'}});
+  const code=`const ui=require('./${staticRoot}ui-utils.js'); const zone='Europe/Prague';
+    const original='2026-10-25T01:30:00.000Z'; const field=ui.zonedDateTime(original, zone);
+    const kept=ui.resolveDateTime(field, original, zone); if(kept!==original) throw Error('unchanged field lost its instant: '+kept);
+    const changed=ui.resolveDateTime('2026-10-25T03:30', original, zone); if(changed!=='2026-10-25T02:30:00.000Z') throw Error('changed field: '+changed);
+    if(ui.resolveDateTime('', original, zone)!==null) throw Error('empty field must clear the date');`;
+  execFileSync(process.execPath,['-e',code],{env:{...process.env,TZ:'UTC'}});
 });
 
 test('saving the global schedule refreshes the open contact without losing its draft', async t => {
@@ -178,7 +196,7 @@ test('saving the global schedule refreshes the open contact without losing its d
   };
   await saveSchedule('21:15');
   assert.match(d.querySelector('#contact-schedule-preview').textContent, /21:15/);
-  assert.match(d.querySelector('#contact-meta').textContent, /Розклад — Europe\/Prague/);
+  assert.match(d.querySelector('#contact-meta').textContent, /у часовому поясі бота: Europe\/Prague/);
   assert.equal(contactForm.elements.exclusion.value, 'forever');
   assert.equal(contactForm.dataset.dirty, 'true');
   d.querySelector('#add-contact-window').click();
