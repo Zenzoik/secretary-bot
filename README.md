@@ -170,6 +170,10 @@ ALLOWED_CHAT_IDS=123456789
 
 ## Запуск в Docker
 
+Production-конфигурация VPS, диагностика и восстановление данных описаны в
+[`docs/deployment-vps.md`](docs/deployment-vps.md). Перед операциями с production
+обязательно прочитать этот runbook.
+
 ```bash
 cp .env.example .env
 # Обязательны: BOT_TOKEN, WEBHOOK_SECRET, MASTER_TELEGRAM_USER_ID,
@@ -185,8 +189,9 @@ docker compose logs -f app
 
 Compose поднимает четыре сервиса: PostgreSQL, Redis с включённым AOF, разовую
 задачу `migrate` (`alembic upgrade head`) и приложение. Порт 8000 слушает только
-127.0.0.1 — публичный HTTPS отдаёт реверс-прокси на хосте, он же держит
-сертификат и передаёт запросы на webhook.
+127.0.0.1 по умолчанию; его можно изменить через `APP_BIND_PORT`. Публичный HTTPS
+отдаёт реверс-прокси на хосте, он же держит сертификат и передаёт запросы на
+webhook. На production VPS используется `APP_BIND_PORT=18080`.
 
 После первого запуска зарегистрировать webhook:
 
