@@ -6,8 +6,8 @@ const {JSDOM} = require('jsdom');
 const base = require('./bootstrap.json');
 const staticRoot = 'src/secretary_bot/web/static/';
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
-async function screen(t, {status=200, theme='dark', handler, data=structuredClone(base)}={}) {
-  const dom = new JSDOM(readFileSync(staticRoot+'index.html','utf8'), {url:'https://testserver/app/', runScripts:'outside-only', pretendToBeVisual:true});
+async function screen(t, {status=200, theme='dark', handler, data=structuredClone(base), url='https://testserver/app/'}={}) {
+  const dom = new JSDOM(readFileSync(staticRoot+'index.html','utf8'), {url, runScripts:'outside-only', pretendToBeVisual:true});
   t.after(()=>dom.window.close());
   const w = dom.window;
   w.matchMedia = () => ({matches:theme==='light'});
@@ -25,6 +25,18 @@ async function screen(t, {status=200, theme='dark', handler, data=structuredClon
 }
 function response(data,status=200){return {status,ok:status===200,json:async()=>data};}
 function contact(id){return {contact_id:id,contact_name:'Контакт '+id,exclusion:'none',windows:[],auto_reply_count:0,preview_count:0,paid_escalation_count:0,off_hours_request_count:0};}
+
+test('Telegram SDK cannot block rendering and launch data still authenticates',async t=>{
+  const html=readFileSync(staticRoot+'index.html','utf8');
+  assert.match(html, /id="telegram-web-app-sdk"[^>]+async/);
+  const initData='query_id=test&user=%7B%22id%22%3A42%7D&hash=signed';
+  let auth;
+  const w=await screen(t,{url:`https://testserver/app/#tgWebAppData=${encodeURIComponent(initData)}&tgWebAppVersion=9.1`,handler:(path,options)=>{
+    if(path==='/api/v1/bootstrap') auth=options.headers['X-Telegram-Init-Data'];
+  }});
+  assert.equal(auth,initData);
+  assert.equal(w.document.querySelector('#views').classList.contains('hidden'),false);
+});
 
 test('server failure offers retry rather than blaming authentication',async t=>{
   const w=await screen(t,{status:503});

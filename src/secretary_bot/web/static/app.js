@@ -2,7 +2,12 @@
   "use strict";
 
   const ui = window.SecretaryUI;
-  const tg = window.Telegram?.WebApp;
+  // Telegram passes signed initData in the launch hash. Keep a copy before
+  // navigation replaces that hash with the selected panel. This also lets the
+  // panel authenticate when telegram-web-app.js is slow or unavailable.
+  const launchInitData = new URLSearchParams(location.hash.slice(1)).get("tgWebAppData") || "";
+  let tg = window.Telegram?.WebApp;
+  let configuredTelegram = null;
   const state = { bootstrap: null, contacts: [], logContacts: [], selectedContact: null, analytics: null, activeView: "overview" };
   const titles = {
     overview: "Огляд", schedule: "Розклад", contacts: "Контакти",
@@ -20,19 +25,34 @@
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
-  tg?.ready();
-  tg?.expand();
-  tg?.setHeaderColor?.("bg_color");
-  tg?.setBackgroundColor?.(tg?.themeParams?.bg_color || "#0d141f");
   function applyTheme() {
     document.documentElement.dataset.theme = tg?.colorScheme || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
   }
-  applyTheme();
-  tg?.onEvent?.("themeChanged", applyTheme);
+
+  function configureTelegram() {
+    const current = window.Telegram?.WebApp;
+    if (current && current !== configuredTelegram) {
+      tg = current;
+      configuredTelegram = current;
+      tg.ready();
+      tg.expand();
+      tg.setHeaderColor?.("bg_color");
+      tg.setBackgroundColor?.(tg.themeParams?.bg_color || "#0d141f");
+      tg.onEvent?.("themeChanged", applyTheme);
+    }
+    applyTheme();
+  }
+
+  // The official SDK is an enhancement, not a parser-blocking dependency.
+  // Some Telegram Desktop networks stall telegram.org while the tunnel itself
+  // remains reachable; the local UI and signed launch data must still work.
+  $("#telegram-web-app-sdk")?.addEventListener("load", configureTelegram);
+  configureTelegram();
 
   function authHeaders() {
     const headers = { "Content-Type": "application/json" };
-    if (tg?.initData) headers["X-Telegram-Init-Data"] = tg.initData;
+    const initData = tg?.initData || launchInitData;
+    if (initData) headers["X-Telegram-Init-Data"] = initData;
     return headers;
   }
 
