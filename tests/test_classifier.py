@@ -210,3 +210,30 @@ def test_dictionary_recalls_money_wording(text: str) -> None:
 )
 def test_dictionary_leaves_ordinary_messages_alone(text: str) -> None:
     assert classify_by_keywords(text, reason="test").category is Category.GENERAL
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "code,confidence,expected",
+    [
+        ("support", 0.95, "support"),
+        ("support", 0.2, "general"),
+        ("deleted", 0.95, "general"),
+        ("money", 0.95, "general"),
+    ],
+)
+async def test_custom_categories_are_allowlisted(code, confidence, expected):
+    result = await classify(
+        "help",
+        model=FakeModel(answer=answer(code, confidence)),
+        settings=ClassifierSettings(active_categories=("general", "support"), money_enabled=False),
+    )
+    assert result.category.value == expected
+
+
+@pytest.mark.asyncio
+async def test_custom_keyword_fallback_is_conservative_when_types_overlap():
+    settings = ClassifierSettings(category_keywords={"support": ("помилк",)})
+    assert (await classify("Помилка входу", settings=settings)).category.value == "support"
+    settings = ClassifierSettings(category_keywords={"support": ("помилк",), "bug": ("помилк",)})
+    assert (await classify("Помилка входу", settings=settings)).category is Category.GENERAL

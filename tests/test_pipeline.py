@@ -561,14 +561,20 @@ async def test_opt_in_retention_encrypts_incoming_and_sent_text(world) -> None:
     assert secret.encode() not in retained[0].body_encrypted
     assert retained[0].retention_until == NIGHT + MESSAGE_RETENTION
     assert retained[1].retention_until == NIGHT + timedelta(minutes=1) + MESSAGE_RETENTION
-    assert cipher.decrypt(
-        retained[0].body_encrypted,
-        context=MessageContext(1, 100, 7, "in"),
-    ) == secret
-    assert cipher.decrypt(
-        retained[1].body_encrypted,
-        context=MessageContext(1, 100, 999, "out"),
-    ) == bot.sent[0]["text"]
+    assert (
+        cipher.decrypt(
+            retained[0].body_encrypted,
+            context=MessageContext(1, 100, 7, "in"),
+        )
+        == secret
+    )
+    assert (
+        cipher.decrypt(
+            retained[1].body_encrypted,
+            context=MessageContext(1, 100, 999, "out"),
+        )
+        == bot.sent[0]["text"]
+    )
 
 
 @pytest.mark.asyncio
@@ -621,7 +627,46 @@ async def test_owner_reply_is_retained_but_excluded_contact_is_not(world) -> Non
         )
     assert len(retained) == 1
     assert retained[0].direction == "out"
-    assert cipher.decrypt(
-        retained[0].body_encrypted,
-        context=MessageContext(1, 100, 7, "out"),
-    ) == "ручной ответ"
+    assert (
+        cipher.decrypt(
+            retained[0].body_encrypted,
+            context=MessageContext(1, 100, 7, "out"),
+        )
+        == "ручной ответ"
+    )
+
+
+@pytest.mark.asyncio
+async def test_custom_category_reply_and_high_priority(world):
+    from tests.test_classifier import FakeModel, answer
+
+    pipeline, bot, notifier, database = world
+    pipeline.model = FakeModel(answer=answer("support", 0.95))
+    await set_connection(database, dry_run=False)
+    async with database.session() as session, session.begin():
+        connection = await session.scalar(select(models.Connection))
+        session.add(
+            models.ClassificationDirection(
+                connection_id=connection.id,
+                code="support",
+                label="Підтримка",
+                description="Помилки",
+                is_active=True,
+                reply_template="Перевірю проблему",
+                priority="high",
+            )
+        )
+    await pipeline.process_incoming(message(text="Помилка входу"))
+    (task,) = await scheduled(pipeline)
+    assert task.category == "support"
+    await pipeline.deliver(task, now=NIGHT + timedelta(minutes=3))
+    assert "Перевірю проблему" in bot.sent[0]["text"]
+    async with database.session() as session:
+        row = await session.scalar(select(models.MorningQueue))
+        assert row.summary == "Підтримка"
+        assert (
+            await session.scalar(
+                select(models.MessageLog).where(models.MessageLog.category == "support")
+            )
+            is not None
+        )

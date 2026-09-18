@@ -21,7 +21,7 @@ DEFAULT_TEMPLATES: Mapping[TemplateCode, str] = {
 
 
 def template_for(category: Category) -> TemplateCode:
-    if category is Category.MONEY:
+    if category == Category.MONEY:
         return TemplateCode.MONEY_PRIORITY
     return TemplateCode.OFF_HOURS_DEFAULT
 

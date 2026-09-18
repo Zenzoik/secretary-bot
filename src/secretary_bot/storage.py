@@ -742,7 +742,21 @@ async def load_templates(session: AsyncSession, connection_id: int) -> dict[str,
             models.Template.is_active.is_(True),
         )
     )
-    return {row.code: row.text for row in rows}
+    templates = {row.code: row.text for row in rows}
+    directions = await session.scalars(
+        select(models.ClassificationDirection).where(
+            models.ClassificationDirection.connection_id == connection_id,
+            models.ClassificationDirection.is_active.is_(True),
+        )
+    )
+    templates.update(
+        {
+            f"direction_{row.code}": row.reply_template
+            for row in directions
+            if row.reply_template.strip()
+        }
+    )
+    return templates
 
 
 async def load_classifier_settings(
@@ -766,6 +780,20 @@ async def load_classifier_settings(
         if direction is None
         else tuple(str(keyword) for keyword in (direction.keywords_json or []))
     )
+    active_rows = list(
+        await session.scalars(
+            select(models.ClassificationDirection).where(
+                models.ClassificationDirection.connection_id == connection_id,
+                models.ClassificationDirection.is_active.is_(True),
+            )
+        )
+    )
+    active = tuple(dict.fromkeys(("general", "money", *(d.code for d in active_rows))))
+    category_keywords = {
+        d.code: tuple(d.keywords_json or [])
+        for d in active_rows
+        if d.code not in {"general", "money"}
+    }
     money_enabled = defaults.money_enabled if direction is None else direction.is_active
     if row is None:
         return ClassifierSettings(
@@ -775,6 +803,8 @@ async def load_classifier_settings(
             timeout_seconds=defaults.timeout_seconds,
             money_keywords=money_keywords,
             money_enabled=money_enabled,
+            active_categories=active,
+            category_keywords=category_keywords,
         )
     return ClassifierSettings(
         system_prompt=row.system_prompt,
@@ -783,6 +813,8 @@ async def load_classifier_settings(
         timeout_seconds=defaults.timeout_seconds,
         money_keywords=money_keywords,
         money_enabled=money_enabled,
+        active_categories=active,
+        category_keywords=category_keywords,
     )
 
 

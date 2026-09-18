@@ -205,7 +205,7 @@ class Pipeline:
                 contact_id=incoming.contact_id,
                 chat_id=incoming.chat_id,
                 message_id=incoming.message_id,
-                template_code=forced_template or template_for(classification.category).value,
+                template_code=forced_template or f"direction_{classification.category.value}",
                 category=classification.category.value,
                 incoming_at=incoming.received_at.isoformat(),
                 sender_identity=connection.sender_identity,
@@ -296,7 +296,17 @@ class Pipeline:
                 return refusal
             overrides = await load_templates(session, connection.id)
 
-        text = render(TemplateCode(task.template_code), overrides=overrides)
+        text = (
+            overrides.get(f"direction_{task.category}")
+            if task.template_code.startswith("direction_")
+            else None
+        )
+        text = text or render(
+            template_for(task.category)
+            if task.template_code.startswith("direction_")
+            else TemplateCode(task.template_code),
+            overrides=overrides,
+        )
         if task.sender_identity == "bot":
             text = as_bot_reply(text)
         if connection.dry_run:
@@ -418,7 +428,18 @@ class Pipeline:
     ) -> None:
         """§6.7. Dry run flags too: the morning list only ever reaches the owner,
         and the shadow week has to exercise the same path as live mode."""
-        if task.category != Category.MONEY.value:
+        direction = await session.scalar(
+            select(models.ClassificationDirection).where(
+                models.ClassificationDirection.connection_id == connection.id,
+                models.ClassificationDirection.code == task.category,
+            )
+        )
+        priority = (
+            direction.priority
+            if direction
+            else ("high" if task.category == Category.MONEY.value else "normal")
+        )
+        if priority != "high":
             return
         await enqueue_morning(
             session,
@@ -426,6 +447,7 @@ class Pipeline:
             contact_id=task.contact_id,
             contact_name=task.contact_name,
             occurred_at=task.incoming_moment,
+            summary=direction.label if direction else None,
         )
 
     async def _alert(self, connection: ConnectionRecord, text: str) -> None:

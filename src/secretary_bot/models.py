@@ -293,7 +293,8 @@ class Prompt(Base):
 class ClassificationDirection(Base):
     __tablename__ = "classification_directions"
     __table_args__ = (
-        CheckConstraint("code IN ('general', 'money')", name="code_values"),
+        CheckConstraint("length(code) BETWEEN 1 AND 40", name="code_values"),
+        CheckConstraint("priority IN ('normal', 'high')", name="priority_values"),
         UniqueConstraint("connection_id", "code"),
     )
 
@@ -302,6 +303,8 @@ class ClassificationDirection(Base):
         ForeignKey("connections.id", ondelete="CASCADE"), index=True
     )
     code: Mapped[str] = mapped_column(Text)
+    reply_template: Mapped[str] = mapped_column(Text, server_default="")
+    priority: Mapped[str] = mapped_column(Text, server_default="normal")
     label: Mapped[str] = mapped_column(Text)
     description: Mapped[str] = mapped_column(Text)
     keywords_json: Mapped[list[str]] = mapped_column(
@@ -394,11 +397,11 @@ class WebSession(Base):
 class MessageLog(Base):
     __tablename__ = "message_log"
     __table_args__ = (
+        CheckConstraint(
+            "category IS NULL OR length(category) BETWEEN 1 AND 40", name="category_values"
+        ),
         CheckConstraint("direction IN ('in', 'out')", name="direction_values"),
         CheckConstraint(f"action IN ({ACTION_SQL_LIST})", name="action_values"),
-        CheckConstraint(
-            "category IS NULL OR category IN ('money', 'general')", name="category_values"
-        ),
         CheckConstraint(
             "confidence IS NULL OR confidence BETWEEN 0.00 AND 1.00",
             name="confidence_range",

@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any, Protocol
@@ -30,7 +30,7 @@ DEFAULT_SYSTEM_PROMPT = """\
 CLASSIFICATION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "category": {"type": "string", "enum": ["money", "general"]},
+        "category": {"type": "string"},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
         "reason": {"type": "string"},
     },
@@ -71,6 +71,12 @@ class Category(StrEnum):
     GENERAL = "general"
 
 
+class CategoryCode(str):
+    @property
+    def value(self) -> str:
+        return str(self)
+
+
 class ClassificationSource(StrEnum):
     LLM = "llm"
     KEYWORDS = "keywords"
@@ -78,7 +84,7 @@ class ClassificationSource(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Classification:
-    category: Category
+    category: Category | CategoryCode
     source: ClassificationSource
     reason: str
     # None for keyword matches: a dictionary hit is not a probability.
@@ -97,6 +103,8 @@ class ClassifierSettings:
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
     money_keywords: tuple[str, ...] = MONEY_KEYWORDS
     money_enabled: bool = True
+    active_categories: tuple[str, ...] = ("general", "money")
+    category_keywords: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 class LanguageModel(Protocol):
@@ -125,6 +133,7 @@ async def classify(
             reason="llm disabled",
             money_keywords=settings.money_keywords,
             money_enabled=settings.money_enabled,
+            category_keywords=settings.category_keywords,
         )
 
     try:
@@ -141,12 +150,14 @@ async def classify(
             reason=f"llm unavailable: {type(exc).__name__}",
             money_keywords=settings.money_keywords,
             money_enabled=settings.money_enabled,
+            category_keywords=settings.category_keywords,
         )
 
     return _interpret(
         raw,
         confidence_min=settings.confidence_min,
         money_enabled=settings.money_enabled,
+        active_categories=settings.active_categories,
     )
 
 
@@ -156,6 +167,7 @@ def classify_by_keywords(
     reason: str,
     money_keywords: tuple[str, ...] = MONEY_KEYWORDS,
     money_enabled: bool = True,
+    category_keywords: dict[str, tuple[str, ...]] | None = None,
 ) -> Classification:
     pattern = (
         _MONEY_PATTERN
@@ -170,6 +182,18 @@ def classify_by_keywords(
             source=ClassificationSource.KEYWORDS,
             reason=f"{reason}; money keyword matched",
         )
+    matches = [
+        code
+        for code, keywords in (category_keywords or {}).items()
+        if keywords
+        and re.search(rf"\b(?:{'|'.join(map(re.escape, keywords))})", text, re.IGNORECASE)
+    ]
+    if len(matches) == 1:
+        return Classification(
+            CategoryCode(matches[0]),
+            ClassificationSource.KEYWORDS,
+            f"{reason}; category keyword matched",
+        )
     return Classification(
         category=Category.GENERAL,
         source=ClassificationSource.KEYWORDS,
@@ -177,7 +201,13 @@ def classify_by_keywords(
     )
 
 
-def _interpret(raw: str, *, confidence_min: Decimal, money_enabled: bool = True) -> Classification:
+def _interpret(
+    raw: str,
+    *,
+    confidence_min: Decimal,
+    money_enabled: bool = True,
+    active_categories: tuple[str, ...] = ("general", "money"),
+) -> Classification:
     payload = _load(raw)
     if payload is None:
         return Classification(
@@ -188,7 +218,12 @@ def _interpret(raw: str, *, confidence_min: Decimal, money_enabled: bool = True)
 
     confidence = _confidence(payload.get("confidence"))
     reason = str(payload.get("reason", ""))[:200]
-    if payload.get("category") != Category.MONEY.value or not money_enabled:
+    code = payload.get("category")
+    if (
+        code not in active_categories
+        or code == "general"
+        or (code == "money" and not money_enabled)
+    ):
         return Classification(Category.GENERAL, ClassificationSource.LLM, reason, confidence)
     if confidence is None:
         return Classification(
@@ -201,7 +236,8 @@ def _interpret(raw: str, *, confidence_min: Decimal, money_enabled: bool = True)
             f"{reason}; below confidence threshold",
             confidence,
         )
-    return Classification(Category.MONEY, ClassificationSource.LLM, reason, confidence)
+    category = Category.MONEY if code == "money" else CategoryCode(code)
+    return Classification(category, ClassificationSource.LLM, reason, confidence)
 
 
 def _load(raw: str) -> dict[str, Any] | None:
