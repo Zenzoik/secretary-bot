@@ -221,3 +221,85 @@ test('saving the global schedule refreshes the open contact without losing its d
   assert.equal(contactForm.dataset.dirty, 'true');
   assert.equal(d.querySelector('#contact-schedule-preview').classList.contains('hidden'), true);
 });
+
+test('custom direction is editable and expansion is a draft until explicit save', async t => {
+  let saved = null;
+  let expanded;
+  const w = await screen(t, {handler: (path, options) => {
+    if (path === '/api/v1/classifier/expand') {
+      expanded = JSON.parse(options.body);
+      return response({system_prompt:'Новий майстер-промпт для general, money та підтримки.', directions: expanded.directions.map(d => ({code:d.code,keywords:d.code==='general'?[]:d.code==='money'?['оплата']:['увійти','авторизац']}))});
+    }
+    if (path === '/api/v1/classifier') {
+      saved = JSON.parse(options.body);
+      return response(saved);
+    }
+  }});
+  const doc = w.document;
+  doc.querySelector('#add-direction').click();
+  const card = [...doc.querySelectorAll('.direction-card')].at(-1);
+  card.querySelector('.direction-label').value = 'Підтримка';
+  card.querySelector('.direction-description').value = 'Помилки в роботі';
+  card.querySelector('.direction-template').value = 'Перевірю';
+  card.querySelector('.direction-priority').value = 'high';
+  const form = doc.querySelector('#classifier-form');
+  assert.equal(form.dataset.dirty, 'true');
+  assert.equal(form.dataset.promptStale, 'true');
+  assert.equal(doc.querySelector('#save-classifier').disabled, true);
+  assert.match(doc.querySelector('#classifier-generation-status').textContent, /Згенеруйте правила/);
+  assert.equal(doc.querySelector('#add-direction').classList.contains('secondary'), true);
+  assert.equal(doc.querySelector('#expand-classifier').classList.contains('primary'), true);
+  assert.equal(card.querySelector('.remove-direction').classList.contains('danger-button'), true);
+  doc.querySelector('#expand-classifier').click(); await tick(); await tick();
+  assert.equal(expanded.directions.length, 3);
+  assert.equal(saved, null);
+  assert.match(form.elements.system_prompt.value, /Новий майстер/);
+  assert.equal(form.dataset.promptStale, 'false');
+  assert.equal(doc.querySelector('#save-classifier').disabled, false);
+  form.dispatchEvent(new w.Event('submit', {bubbles:true,cancelable:true}));
+  await tick(); await tick();
+  assert.equal(saved.directions[2].reply_template, 'Перевірю');
+  assert.equal(saved.directions[2].priority, 'high');
+  assert.deepEqual(saved.directions[2].keywords, ['увійти','авторизац']);
+  assert.equal(saved.directions[2].description, 'Помилки в роботі');
+});
+
+test('custom direction cannot be generated without a client reply', async t => {
+  let expansionCalls = 0;
+  const w = await screen(t, {handler: path => {
+    if (path === '/api/v1/classifier/expand') expansionCalls += 1;
+  }});
+  const doc = w.document;
+  doc.querySelector('#add-direction').click();
+  const card = [...doc.querySelectorAll('.direction-card')].at(-1);
+  doc.querySelector('#expand-classifier').click();
+  await tick();
+  assert.equal(expansionCalls, 0);
+  assert.equal(doc.activeElement, card.querySelector('.direction-label'));
+  assert.match(doc.querySelector('#toast').textContent, /назву, опис і відповідь/);
+
+  card.querySelector('.direction-label').value = 'Підтримка';
+  card.querySelector('.direction-description').value = 'Проблеми зі входом';
+  const reply = card.querySelector('.direction-template');
+  reply.value = '   ';
+  assert.equal(reply.required, true);
+  assert.match(reply.previousElementSibling.textContent, /Обов’язкове поле/);
+
+  doc.querySelector('#expand-classifier').click();
+  await tick();
+
+  assert.equal(expansionCalls, 0);
+  assert.equal(doc.activeElement, reply);
+  assert.match(doc.querySelector('#toast').textContent, /Додайте відповідь клієнту/);
+  assert.equal(doc.querySelector('[data-code="general"] .direction-template').required, false);
+  assert.match(doc.querySelector('[data-code="general"] .direction-template').previousElementSibling.textContent, /вкладки «Шаблони»/);
+});
+
+test('failed expansion preserves manually edited master prompt', async t => {
+  const w = await screen(t, {handler: path => path === '/api/v1/classifier/expand' ? response({detail:'ШІ недоступний'},503) : null});
+  const form = w.document.querySelector('#classifier-form');
+  form.elements.system_prompt.value = 'Моя вручну відредагована інструкція';
+  w.document.querySelector('#expand-classifier').click(); await tick(); await tick();
+  assert.equal(form.elements.system_prompt.value, 'Моя вручну відредагована інструкція');
+  assert.equal(w.document.querySelector('#expand-classifier').disabled, false);
+});

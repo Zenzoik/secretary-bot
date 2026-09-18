@@ -155,7 +155,9 @@
         setDirty(form, false);
         const fill = {"delivery-form":fillDelivery,"escalation-form":fillEscalation,"schedule-form":fillSchedule,"templates-form":fillTemplates,"classifier-form":fillClassifier,"summary-form":fillSummary,"contact-form":() => state.selectedContact && fillContactForm(state.selectedContact)}[form.id];
         fill?.(); $$(".field-error", form).forEach(node => node.remove());
-      }); form.append(reset);
+      });
+      const actions = $$(".form-actions", form).at(-1);
+      (actions || form).append(reset);
     }
     reset?.classList.toggle("hidden", !dirty);
     const anyDirty = $$("form[data-dirty=true]").length > 0;
@@ -318,19 +320,87 @@
     form.elements.money_priority.value = state.bootstrap.templates.money_priority;
   }
 
+  function directionsPayload() {
+    return $$(".direction-card").map((card) => ({
+      code: card.dataset.code, label: $(".direction-label", card).value,
+      description: $(".direction-description", card).value,
+      keywords: $(".direction-keywords", card).value.split(",").map((v) => v.trim()).filter(Boolean),
+      is_active: card.dataset.code === "general" || $(".direction-active", card).checked,
+      reply_template: $(".direction-template", card).value,
+      priority: $(".direction-priority", card).value,
+    }));
+  }
+
+  function classifierPayload() {
+    const form = $("#classifier-form");
+    return { directions: directionsPayload(), system_prompt: form.elements.system_prompt.value,
+      model: form.elements.model.value, confidence_min: form.elements.confidence_min.value };
+  }
+
+  function renderDirections(directions) {
+    $("#direction-list").innerHTML = directions.map((direction) => {
+      const custom = !["general", "money"].includes(direction.code);
+      const replyHelp = custom
+        ? "Обов’язкове поле для нового типу. Цей текст бот надішле клієнту."
+        : "Якщо залишити порожнім, бот використає відповідний шаблон із вкладки «Шаблони».";
+      const replyPlaceholder = custom
+        ? "Наприклад: Побачив ваше звернення. Перевірю проблему."
+        : "Порожнє поле — використати стандартний шаблон";
+      return `
+        <article class="direction-card" data-code="${escapeHtml(direction.code)}">
+          <label>Назва<input class="direction-label" maxlength="80" value="${escapeHtml(direction.label)}" required></label>
+          <label>Опис<textarea class="direction-description" maxlength="500" rows="3" required>${escapeHtml(direction.description)}</textarea></label>
+          <label class="keywords">Ключові слова, через кому<small>ШІ підбере їх під час оновлення майстер-промпта. Використовуються, коли ШІ недоступний; для загального типу не потрібні.</small><input class="direction-keywords" value="${escapeHtml(direction.keywords.join(", "))}"></label>
+          <label>Відповідь для цього типу<small>${replyHelp}</small><textarea class="direction-template" maxlength="2000" rows="3" placeholder="${replyPlaceholder}" ${custom ? "required" : ""}>${escapeHtml(direction.reply_template || "")}</textarea></label>
+          <label>Пріоритет<select class="direction-priority"><option value="normal">Звичайний</option><option value="high" ${direction.priority === "high" ? "selected" : ""}>Високий — додати до ранкового списку важливих</option></select></label>
+          <label class="switch-row"><span><strong>Тип активний</strong></span><input class="direction-active" type="checkbox" role="switch" ${direction.is_active ? "checked" : ""} ${direction.code === "general" ? "disabled" : ""}></label>
+          ${custom ? '<button type="button" class="danger-button remove-direction">Видалити тип</button>' : ""}
+        </article>`;
+    }).join("");
+  }
+
+  function validateClassifierForm(form) {
+    const blank = $$(".direction-label, .direction-description, .direction-template[required]", form)
+      .find((field) => !field.value.trim());
+    const invalid = blank || $$('input, textarea, select', form).find((field) => !field.checkValidity());
+    if (!invalid) return true;
+    if (!blank) form.reportValidity();
+    invalid?.scrollIntoView({behavior: "smooth", block: "center"});
+    invalid?.focus({preventScroll: true});
+    const message = invalid?.matches(".direction-template")
+      ? "Додайте відповідь клієнту для нового типу."
+      : "Заповніть назву, опис і відповідь для нового типу.";
+    toast(message, true);
+    tg?.HapticFeedback?.notificationOccurred?.("error");
+    return false;
+  }
+
+  function setClassifierGenerationState(stale) {
+    const form = $("#classifier-form");
+    form.dataset.promptStale = String(stale);
+    const step = $("#classifier-generation-step");
+    const status = $("#classifier-generation-status");
+    const save = $("#save-classifier");
+    const hint = $("#classifier-save-hint");
+    step.classList.toggle("needs-generation", stale);
+    save.disabled = stale;
+    status.textContent = stale
+      ? "Типи змінено. Згенеруйте правила, щоб перейти до збереження."
+      : "Майстер-промпт і ключові слова відповідають поточним типам.";
+    hint.textContent = stale
+      ? "Спочатку завершіть крок 2 — згенеруйте правила для змінених типів."
+      : "Після збереження нові типи почнуть використовуватися класифікатором.";
+  }
+
   function fillClassifier() {
     const form = $("#classifier-form");
     const data = state.bootstrap.classifier;
-    $("#direction-list").innerHTML = data.directions.map((direction) => `
-      <article class="direction-card" data-code="${direction.code}">
-        <label>Назва<input class="direction-label" maxlength="80" value="${escapeHtml(direction.label)}" required></label>
-        <label>Опис<input class="direction-description" maxlength="500" value="${escapeHtml(direction.description)}" required></label>
-        <label class="keywords">Ключові слова, через кому<input class="direction-keywords" value="${escapeHtml(direction.keywords.join(", "))}"></label>
-        <label class="switch-row"><span><strong>Тип активний</strong><small>${escapeHtml(categoryLabels[direction.code] || direction.label)}</small></span><input class="direction-active" type="checkbox" role="switch" ${direction.is_active ? "checked" : ""} ${direction.code === "general" ? "disabled" : ""}></label>
-      </article>`).join("");
+    data.directions.forEach((d) => { categoryLabels[d.code] = d.label; });
+    renderDirections(data.directions);
     form.elements.system_prompt.value = data.system_prompt;
     form.elements.model.value = data.model;
     form.elements.confidence_min.value = data.confidence_min;
+    setClassifierGenerationState(false);
   }
 
   function fillSummary() {
@@ -583,7 +653,7 @@
         const result = await api("/api/v1/preview", {method:"POST", body:JSON.stringify({text:form.elements.text.value, contact_id:state.selectedContact?.contact_id || null})});
         const draftNote = $("#contact-form").dataset.dirty === "true" ? "Перевірка за збереженими правилами: незбережені зміни контакту не враховано. " : "";
         const templateNote = result.forced_template ? "Шаблон: персональний для контакту" : `Шаблон: ${templateLabels[result.template_code] || "за типом"}`;
-        $("#preview-result").textContent = `${draftNote}${result.decision === "allowed" ? (result.dry_run ? "Буде лише тестове прев’ю" : "Відповідь дозволена") : actionLabels[result.decision] || result.decision}. ${result.personal_schedule ? "Персональний" : "Основний"} розклад, ${result.timezone}. Тип: ${categoryLabels[result.category]}. ${templateNote}. Приклад відповіді: ${result.text}`;
+        $("#preview-result").textContent = `${draftNote}${result.decision === "allowed" ? (result.dry_run ? "Буде лише тестове прев’ю" : "Відповідь дозволена") : actionLabels[result.decision] || result.decision}. ${result.personal_schedule ? "Персональний" : "Основний"} розклад, ${result.timezone}. Тип: ${categoryLabels[result.category] || result.category}. ${templateNote}. Приклад відповіді: ${result.text}`;
       });
     });
     $("#retry-notifications").addEventListener("click", (event) => withBusyButton(event.currentTarget, "Повторюємо…", async () => {
@@ -671,12 +741,72 @@
       state.bootstrap.templates = await api("/api/v1/templates", { method: "PUT", body: JSON.stringify({ off_hours_default: form.elements.off_hours_default.value, money_priority: form.elements.money_priority.value }) });
       fillTemplates();
     }); });
-    $("#classifier-form").addEventListener("submit", (event) => { event.preventDefault(); submit(event.currentTarget, async () => {
+    $("#add-direction").addEventListener("click", () => {
+      const directions = directionsPayload();
+      if (directions.length >= 30) { toast("Можна додати до 30 типів"); return; }
+      directions.push({code: `type_${crypto.randomUUID().replaceAll("-", "")}`, label: "", description: "", keywords: [], reply_template: "", is_active: true, priority: "normal"});
+      renderDirections(directions);
+      const card = $$(".direction-card").at(-1);
+      $(".direction-label", card).focus();
+      card.scrollIntoView({behavior: "smooth", block: "center"});
+      setClassifierGenerationState(true);
+      $("#classifier-form").dispatchEvent(new Event("input", {bubbles: true}));
+    });
+    $("#direction-list").addEventListener("click", (event) => {
+      if (!event.target.closest(".remove-direction")) return;
+      event.target.closest(".direction-card").remove();
+      setClassifierGenerationState(true);
+      $("#classifier-form").dispatchEvent(new Event("input", {bubbles: true}));
+    });
+    $("#direction-list").addEventListener("input", (event) => {
+      if (event.target.matches(".direction-label, .direction-description, .direction-active")) {
+        setClassifierGenerationState(true);
+      }
+    });
+    $("#direction-list").addEventListener("change", (event) => {
+      if (event.target.matches(".direction-active")) setClassifierGenerationState(true);
+    });
+    $("#expand-classifier").addEventListener("click", async (event) => {
+      const form = $("#classifier-form");
+      if (!validateClassifierForm(form)) return;
+      const button = event.currentTarget;
+      const payload = classifierPayload();
+      const snapshot = JSON.stringify(payload);
+      button.disabled = true;
+      button.textContent = "Генеруємо…";
+      try {
+        const result = await api("/api/v1/classifier/expand", {method: "POST", body: snapshot});
+        if (JSON.stringify(classifierPayload()) !== snapshot) {
+          toast("Налаштування змінилися під час генерації. Згенеруйте ще раз."); return;
+        }
+        const keywordsByCode = new Map(result.directions.map((d) => [d.code, d.keywords]));
+        if (keywordsByCode.size !== payload.directions.length ||
+            payload.directions.some((d) => !keywordsByCode.has(d.code))) {
+          throw new Error("ШІ повернув неповний результат. Спробуйте ще раз.");
+        }
+        $$(".direction-card").forEach((card) => {
+          $(".direction-keywords", card).value = keywordsByCode.get(card.dataset.code).join(", ");
+        });
+        form.elements.system_prompt.value = result.system_prompt;
+        form.dispatchEvent(new Event("input", {bubbles: true}));
+        setClassifierGenerationState(false);
+        form.elements.system_prompt.focus();
+        toast("Інструкцію та ключові слова згенеровано. Перевірте їх і збережіть.");
+      } catch (error) { toast(error.message); }
+      finally { button.disabled = false; button.textContent = "Згенерувати правила для типів"; }
+    });
+    $("#classifier-form").addEventListener("submit", (event) => {
+      event.preventDefault();
       const form = event.currentTarget;
-      const directions = $$(".direction-card").map((card) => ({ code: card.dataset.code, label: $(".direction-label", card).value, description: $(".direction-description", card).value, keywords: $(".direction-keywords", card).value.split(",").map((item) => item.trim()).filter(Boolean), is_active: card.dataset.code === "general" || $(".direction-active", card).checked }));
-      state.bootstrap.classifier = await api("/api/v1/classifier", { method: "PUT", body: JSON.stringify({ directions, system_prompt: form.elements.system_prompt.value, model: form.elements.model.value, confidence_min: form.elements.confidence_min.value }) });
-      fillClassifier();
-    }); });
+      if (!validateClassifierForm(form)) return;
+      submit(form, async () => {
+        if (form.dataset.promptStale === "true") {
+          throw new Error("Спочатку згенеруйте правила для змінених типів");
+        }
+        state.bootstrap.classifier = await api("/api/v1/classifier", { method: "PUT", body: JSON.stringify(classifierPayload()) });
+        fillClassifier();
+      });
+    });
     $("#summary-form").addEventListener("submit", (event) => { event.preventDefault(); submit(event.currentTarget, async () => {
       const form = event.currentTarget;
       const enableRetention = form.elements.message_retention_enabled.checked;
