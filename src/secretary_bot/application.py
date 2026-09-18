@@ -207,6 +207,7 @@ def create_app(
             database=connection_database,
             settings=settings,
             summary_channel_connector=summary_channel_connector,
+            language_model=language_model,
         )
     )
     app.mount("/assets", StaticFiles(directory=WEB_ROOT), name="web-assets")

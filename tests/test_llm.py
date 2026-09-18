@@ -100,6 +100,27 @@ async def test_openai_exhausted_output_budget_names_the_reason() -> None:
     model = OpenAILanguageModel(client=FakeClient(responses))  # type: ignore[arg-type]
 
     with pytest.raises(ValueError, match="max_output_tokens"):
-        await model.summarize_dialogue(
-            "IN: hello", system_prompt="summarize", model="gpt-5-mini"
-        )
+        await model.summarize_dialogue("IN: hello", system_prompt="summarize", model="gpt-5-mini")
+
+
+@pytest.mark.asyncio
+async def test_prompt_expansion_uses_separate_schema_and_does_not_store_input():
+    from secretary_bot.llm import EXPANSION_SCHEMA
+
+    responses = FakeResponses('{"system_prompt":"general and money classification"}')
+    model = OpenAILanguageModel(client=FakeClient(responses))
+    await model.expand_classifier('{"directions": []}', model="gpt-5-mini")
+    call = responses.calls[0]
+    assert call["store"] is False
+    assert call["text"]["format"]["schema"] == EXPANSION_SCHEMA
+    assert call["max_output_tokens"] == 4000
+
+
+@pytest.mark.asyncio
+async def test_luna_uses_no_reasoning_to_preserve_short_json_budget():
+    responses = FakeResponses('{"category":"money","confidence":0.95,"reason":"Оплата"}')
+    model = OpenAILanguageModel(client=FakeClient(responses))
+    await model.classify("Рахунок", system_prompt="Classify", model="claude-sonnet-4-6")
+    assert responses.calls[0]["model"] == "gpt-5.6-luna"
+    assert responses.calls[0]["reasoning"] == {"effort": "none"}
+    assert responses.calls[0]["store"] is False

@@ -22,7 +22,7 @@ def test_defaults_keep_the_bot_offline_and_silent(monkeypatch: pytest.MonkeyPatc
     assert settings.anthropic_api_key is None
     assert settings.openai_api_key is None
     assert settings.llm_provider == "auto"
-    assert settings.openai_model == "gpt-5-mini"
+    assert settings.openai_model == "gpt-5.6-luna"
     assert settings.allowed_chat_ids == frozenset()
 
 

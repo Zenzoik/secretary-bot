@@ -637,3 +637,187 @@ async def test_updates_cannot_mutate_another_owners_connection(database: Databas
         second = await session.get(models.Connection, second_id)
         assert first is not None and first.sender_identity == "bot"
         assert second is not None and second.sender_identity == "owner"
+
+
+@pytest.mark.asyncio
+async def test_custom_direction_roundtrip_and_tenant_isolation(database):
+    from secretary_bot.storage import load_classifier_settings, load_templates
+
+    owner = await seed_owner(database)
+    other = await seed_owner(database, user_id=43)
+    async with AsyncClient(
+        transport=ASGITransport(app=web_app(database)), base_url="https://testserver"
+    ) as client:
+        payload = (await client.get("/api/v1/bootstrap", headers=headers())).json()["classifier"]
+        payload["directions"].append(
+            {
+                "code": "support",
+                "label": "Підтримка",
+                "description": "Питання про помилки",
+                "reply_template": "Перевірю проблему",
+                "priority": "high",
+                "keywords": [],
+            }
+        )
+        result = await client.put("/api/v1/classifier", headers=headers(), json=payload)
+        assert result.status_code == 200
+        assert result.json()["directions"][-1]["reply_template"] == "Перевірю проблему"
+        async with database.session() as session:
+            assert "support" in (await load_classifier_settings(session, owner)).active_categories
+            assert (
+                "support" not in (await load_classifier_settings(session, other)).active_categories
+            )
+            assert (await load_templates(session, owner))[
+                "direction_support"
+            ] == "Перевірю проблему"
+        payload["directions"][-1]["is_active"] = False
+        assert (
+            await client.put("/api/v1/classifier", headers=headers(), json=payload)
+        ).status_code == 200
+        async with database.session() as session:
+            assert (
+                "support" not in (await load_classifier_settings(session, owner)).active_categories
+            )
+        payload["directions"].pop()
+        assert (
+            await client.put("/api/v1/classifier", headers=headers(), json=payload)
+        ).status_code == 200
+        async with database.session() as session:
+            assert (
+                await session.scalar(
+                    select(models.ClassificationDirection).where(
+                        models.ClassificationDirection.code == "support"
+                    )
+                )
+                is None
+            )
+
+
+@pytest.mark.asyncio
+async def test_custom_direction_requires_reply_template(database):
+    await seed_owner(database)
+    async with AsyncClient(
+        transport=ASGITransport(app=web_app(database)), base_url="https://testserver"
+    ) as client:
+        payload = (await client.get("/api/v1/bootstrap", headers=headers())).json()["classifier"]
+        payload["directions"].append(
+            {
+                "code": "support",
+                "label": "Підтримка",
+                "description": "Проблеми зі входом",
+                "reply_template": "   ",
+                "priority": "normal",
+                "keywords": [],
+            }
+        )
+
+        save = await client.put("/api/v1/classifier", headers=headers(), json=payload)
+        expand = await client.post(
+            "/api/v1/classifier/expand", headers=headers(), json=payload
+        )
+
+    assert save.status_code == 422
+    assert expand.status_code == 422
+    assert "відповідь клієнту" in save.text
+
+
+@pytest.mark.asyncio
+async def test_expansion_is_authenticated_preview_and_errors_preserve_prompt(database):
+    await seed_owner(database)
+
+    class Generator:
+        calls = 0
+        output = json.dumps(
+            {
+                "system_prompt": "Класифікуй: general — інше, money — оплата.",
+                "directions": [
+                    {"code": "general", "keywords": []},
+                    {"code": "money", "keywords": ["Оплата", "рахунок", "оплата"]},
+                ],
+            }
+        )
+
+        async def expand_classifier(self, text, *, model):
+            self.calls += 1
+            return self.output
+
+    generator = Generator()
+    app = FastAPI()
+    app.include_router(
+        build_web_router(
+            database=database,
+            settings=Settings(bot_token=TOKEN, webhook_secret="secret", master_user_id=42),
+            language_model=generator,
+        )
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://testserver"
+    ) as client:
+        payload = (await client.get("/api/v1/bootstrap", headers=headers())).json()["classifier"]
+        assert (await client.post("/api/v1/classifier/expand", json=payload)).status_code == 401
+        assert generator.calls == 0
+        result = await client.post("/api/v1/classifier/expand", headers=headers(), json=payload)
+        assert result.status_code == 200
+        saved = (await client.get("/api/v1/bootstrap", headers=headers())).json()["classifier"]
+        assert saved["system_prompt"] == payload["system_prompt"]
+        assert result.json()["directions"][1]["keywords"] == ["оплата", "рахунок"]
+        assert saved["directions"] == payload["directions"]
+        payload["system_prompt"] = result.json()["system_prompt"]
+        for direction, expanded in zip(
+            payload["directions"], result.json()["directions"], strict=True
+        ):
+            direction["keywords"] = expanded["keywords"]
+        applied = await client.put("/api/v1/classifier", headers=headers(), json=payload)
+        assert applied.status_code == 200
+        assert applied.json()["directions"][1]["keywords"] == ["оплата", "рахунок"]
+        generator.output = '{"system_prompt":"Missing category definitions here"}'
+        assert (
+            await client.post("/api/v1/classifier/expand", headers=headers(), json=payload)
+        ).status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_expansion_retries_without_old_prompt_when_model_keeps_deleted_type(database):
+    await seed_owner(database)
+    stale_code = "type_deadbeef"
+
+    class Generator:
+        calls: list[dict[str, object]] = []
+
+        async def expand_classifier(self, text, *, model):
+            request = json.loads(text)
+            self.calls.append(request)
+            suffix = f", {stale_code} — видалений тип" if len(self.calls) == 1 else ""
+            return json.dumps(
+                {
+                    "system_prompt": f"Класифікуй лише general і money{suffix}.",
+                    "directions": [
+                        {"code": "general", "keywords": []},
+                        {"code": "money", "keywords": ["оплата"]},
+                    ],
+                }
+            )
+
+    generator = Generator()
+    app = FastAPI()
+    app.include_router(
+        build_web_router(
+            database=database,
+            settings=Settings(bot_token=TOKEN, webhook_secret="secret", master_user_id=42),
+            language_model=generator,
+        )
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="https://testserver"
+    ) as client:
+        payload = (await client.get("/api/v1/bootstrap", headers=headers())).json()["classifier"]
+        payload["system_prompt"] += f"\n- {stale_code} — старий тип"
+        result = await client.post("/api/v1/classifier/expand", headers=headers(), json=payload)
+
+    assert result.status_code == 200
+    assert stale_code not in result.json()["system_prompt"]
+    assert len(generator.calls) == 2
+    assert generator.calls[0]["current_prompt"] == payload["system_prompt"]
+    assert generator.calls[0]["regenerate_from_scratch"] is False
+    assert generator.calls[1]["current_prompt"] == ""
+    assert generator.calls[1]["regenerate_from_scratch"] is True

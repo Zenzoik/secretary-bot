@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import json
+import re
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
@@ -22,6 +25,7 @@ from secretary_bot.classifier import (
     DEFAULT_MODEL,
     DEFAULT_SYSTEM_PROMPT,
     MONEY_KEYWORDS,
+    LanguageModel,
     classify,
 )
 from secretary_bot.config import Settings
@@ -140,11 +144,25 @@ class TemplatesPayload(BaseModel):
 
 
 class DirectionPayload(BaseModel):
-    code: Literal["general", "money"]
+    code: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,39}$")]
+    reply_template: Annotated[str, Field(max_length=2000)] = ""
+    priority: Literal["normal", "high"] | None = None
     label: Annotated[str, Field(min_length=1, max_length=80)]
     description: Annotated[str, Field(min_length=1, max_length=500)]
     keywords: Annotated[list[str], Field(max_length=100)] = Field(default_factory=list)
     is_active: bool = True
+
+    @field_validator("label", "description")
+    @classmethod
+    def nonblank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Заповніть поле")
+        return value.strip()
+
+    @field_validator("reply_template")
+    @classmethod
+    def clean_reply_template(cls, value: str) -> str:
+        return value.strip()
 
     @field_validator("keywords")
     @classmethod
@@ -158,21 +176,96 @@ class DirectionPayload(BaseModel):
                 cleaned.append(keyword)
         return cleaned
 
+    @model_validator(mode="after")
+    def require_custom_reply_template(self) -> DirectionPayload:
+        if self.code not in {"general", "money"} and not self.reply_template:
+            raise ValueError("Для нового типу вкажіть відповідь клієнту")
+        return self
+
 
 class ClassifierPayload(BaseModel):
-    directions: Annotated[list[DirectionPayload], Field(min_length=2, max_length=2)]
+    directions: Annotated[list[DirectionPayload], Field(min_length=2, max_length=30)]
     system_prompt: Annotated[str, Field(min_length=20, max_length=8000)]
     model: Annotated[str, Field(pattern=r"^[A-Za-z0-9._-]{3,100}$")]
     confidence_min: Annotated[Decimal, Field(ge=Decimal("0"), le=Decimal("1"))]
 
     @model_validator(mode="after")
     def validate_directions(self) -> ClassifierPayload:
-        if {direction.code for direction in self.directions} != {"general", "money"}:
+        codes = [direction.code for direction in self.directions]
+        if len(codes) != len(set(codes)):
+            raise ValueError("Коди типів мають бути унікальними")
+        if not {"general", "money"}.issubset(codes):
             raise ValueError("Потрібні напрямки general і money")
         general = next(item for item in self.directions if item.code == "general")
         if not general.is_active:
             raise ValueError("Загальний напрямок має залишатися активним")
         return self
+
+
+def parse_classifier_expansion(raw: str, payload: ClassifierPayload) -> dict[str, Any]:
+    result = json.loads(raw)
+    prompt = result["system_prompt"]
+    if not isinstance(prompt, str):
+        raise ValueError("Invalid prompt")
+    for direction in payload.directions:
+        # Models sometimes escape underscores as Markdown despite plain-text instructions.
+        prompt = prompt.replace(direction.code.replace("_", "\\_"), direction.code)
+    prompt = prompt.strip()
+    if not 20 <= len(prompt) <= 8000:
+        raise ValueError("Invalid prompt length")
+    active_codes = {direction.code for direction in payload.directions if direction.is_active}
+    mentioned_custom_codes = set(re.findall(r"\btype_[a-z0-9_]{4,40}\b", prompt))
+    if mentioned_custom_codes - active_codes:
+        raise ValueError("Stale categories")
+    if any(
+        not re.search(rf"(?<![a-zA-Z0-9_]){re.escape(d.code)}(?![a-zA-Z0-9_])", prompt)
+        for d in payload.directions
+        if d.is_active
+    ):
+        raise ValueError("Missing categories")
+    generated = result["directions"]
+    if not isinstance(generated, list) or len(generated) != len(payload.directions):
+        raise ValueError("Missing keyword lists")
+    by_code = {}
+    for item in generated:
+        if not isinstance(item, dict) or set(item) != {"code", "keywords"}:
+            raise ValueError("Invalid keywords entry")
+        code = item["code"]
+        if not isinstance(code, str) or code in by_code:
+            raise ValueError("Duplicate or invalid code")
+        by_code[code] = item["keywords"]
+    if set(by_code) != {d.code for d in payload.directions}:
+        raise ValueError("Unknown or missing code")
+    directions = []
+    for direction in payload.directions:
+        candidate = DirectionPayload.model_validate(
+            {
+                **direction.model_dump(),
+                "keywords": by_code[direction.code],
+            }
+        )
+        if any("," in word or "\n" in word or "\r" in word for word in candidate.keywords):
+            raise ValueError("Invalid keyword separator")
+        keywords = candidate.keywords if direction.is_active else direction.keywords
+        if direction.code == "general":
+            keywords = []
+        elif direction.is_active and not keywords:
+            raise ValueError("Empty keyword list")
+        directions.append({"code": direction.code, "keywords": keywords})
+    return {"system_prompt": prompt, "directions": directions}
+
+
+def classifier_expansion_input(
+    payload: ClassifierPayload, *, regenerate_from_scratch: bool = False
+) -> str:
+    return json.dumps(
+        {
+            "current_prompt": "" if regenerate_from_scratch else payload.system_prompt,
+            "regenerate_from_scratch": regenerate_from_scratch,
+            "directions": [direction.model_dump() for direction in payload.directions],
+        },
+        ensure_ascii=False,
+    )
 
 
 class SummaryPayload(BaseModel):
@@ -271,15 +364,21 @@ def build_web_router(
     database: Database,
     settings: Settings,
     summary_channel_connector: SummaryChannelConnector | None = None,
+    language_model: LanguageModel | None = None,
 ) -> APIRouter:
     router = APIRouter()
     api = WebApi(database=database, settings=settings)
+    default_model = (
+        settings.openai_model
+        if settings.llm_provider in {"auto", "openai"} and settings.openai_api_key
+        else DEFAULT_MODEL
+    )
 
     @router.get("/api/v1/bootstrap")
     async def bootstrap(request: Request) -> dict[str, Any]:
         async with database.session() as session, session.begin():
             principal = await api.authorize(session, request)
-            return await _bootstrap(session, principal)
+            return await _bootstrap(session, principal, default_model=default_model)
 
     @router.post("/api/v1/control")
     async def control(request: Request, payload: ControlPayload) -> dict[str, Any]:
@@ -307,7 +406,7 @@ def build_web_router(
             # Pending replies are not dropped here: the worker re-checks pause,
             # kill switch and dry-run at delivery time and logs the outcome.
             await session.flush()
-            return await _bootstrap(session, principal)
+            return await _bootstrap(session, principal, default_model=default_model)
 
     @router.post("/api/v1/notifications/retry")
     async def retry_notifications(request: Request) -> dict[str, Any]:
@@ -316,7 +415,7 @@ def build_web_router(
             await retry_failed_notifications(
                 session, connection_id=principal.connection.id, now=datetime.now(UTC)
             )
-            return await _bootstrap(session, principal)
+            return await _bootstrap(session, principal, default_model=default_model)
 
     @router.post("/api/v1/preview")
     async def preview(request: Request, payload: PreviewPayload) -> dict[str, Any]:
@@ -344,11 +443,13 @@ def build_web_router(
             )
             classifier_settings = await load_classifier_settings(session, connection.id)
             templates = await load_templates(session, connection.id)
-        result = await classify(payload.text, settings=classifier_settings)
+        result = await classify(payload.text, model=language_model, settings=classifier_settings)
         template = (
             TemplateCode(forced_template) if forced_template else template_for(result.category)
         )
-        text = render(template, overrides=templates)
+        text = (
+            templates.get(f"direction_{result.category.value}") if not forced_template else None
+        ) or render(template, overrides=templates)
         if connection.sender_identity == "bot":
             text = as_bot_reply(text)
         return {
@@ -359,7 +460,7 @@ def build_web_router(
             "text": text,
             "dry_run": connection.dry_run,
             "timezone": connection.policy.timezone,
-            "source": "keywords",
+            "source": result.source.value,
             "personal_schedule": bool(contact.windows),
         }
 
@@ -478,10 +579,51 @@ def build_web_router(
             await session.flush()
             return await _templates(session, principal.connection.id)
 
+    @router.post("/api/v1/classifier/expand")
+    async def expand_classifier(request: Request, payload: ClassifierPayload) -> dict[str, Any]:
+        async with database.session() as session, session.begin():
+            await api.authorize(session, request)
+        generator = getattr(language_model, "expand_classifier", None)
+        if generator is None:
+            raise HTTPException(503, "Генерація недоступна: ШІ не налаштований")
+        try:
+
+            async def generate(*, regenerate_from_scratch: bool = False) -> dict[str, Any]:
+                raw = await asyncio.wait_for(
+                    generator(
+                        classifier_expansion_input(
+                            payload, regenerate_from_scratch=regenerate_from_scratch
+                        ),
+                        model=payload.model,
+                    ),
+                    timeout=60,
+                )
+                return parse_classifier_expansion(raw, payload)
+
+            try:
+                result = await generate()
+            except (KeyError, TypeError, ValueError):
+                # current_prompt can tempt the model to retain a deleted type.
+                # Retry once using the cards as the only source of truth.
+                result = await generate(regenerate_from_scratch=True)
+        except Exception as exc:
+            raise HTTPException(
+                502, "Не вдалося згенерувати інструкцію. Спробуйте ще раз."
+            ) from exc
+        return result
+
     @router.put("/api/v1/classifier")
     async def update_classifier(request: Request, payload: ClassifierPayload) -> dict[str, Any]:
         async with database.session() as session, session.begin():
             principal = await api.authorize(session, request)
+            await session.execute(
+                delete(models.ClassificationDirection).where(
+                    models.ClassificationDirection.connection_id == principal.connection.id,
+                    models.ClassificationDirection.code.not_in(
+                        [d.code for d in payload.directions]
+                    ),
+                )
+            )
             for direction in payload.directions:
                 row = await session.scalar(
                     select(models.ClassificationDirection).where(
@@ -497,6 +639,10 @@ def build_web_router(
                         description=direction.description,
                     )
                     session.add(row)
+                row.reply_template = direction.reply_template.strip()
+                row.priority = direction.priority or (
+                    "high" if direction.code == "money" else "normal"
+                )
                 row.label = direction.label.strip()
                 row.description = direction.description.strip()
                 row.keywords_json = direction.keywords
@@ -518,7 +664,7 @@ def build_web_router(
             prompt.model = payload.model
             prompt.confidence_min = payload.confidence_min
             await session.flush()
-            return await _classifier(session, principal.connection.id)
+            return await _classifier(session, principal.connection.id, default_model=default_model)
 
     @router.put("/api/v1/summary")
     async def update_summary(request: Request, payload: SummaryPayload) -> dict[str, Any]:
@@ -816,7 +962,9 @@ def _month_bounds(month: str) -> tuple[date, date]:
     return month_start, next_month - timedelta(days=1)
 
 
-async def _bootstrap(session: AsyncSession, principal: Principal) -> dict[str, Any]:
+async def _bootstrap(
+    session: AsyncSession, principal: Principal, *, default_model: str = DEFAULT_MODEL
+) -> dict[str, Any]:
     return {
         "user": {
             "id": principal.user.user_id,
@@ -836,7 +984,9 @@ async def _bootstrap(session: AsyncSession, principal: Principal) -> dict[str, A
         "escalation": _escalation(principal.connection),
         "schedule": await _schedule(session, principal.connection),
         "templates": await _templates(session, principal.connection.id),
-        "classifier": await _classifier(session, principal.connection.id),
+        "classifier": await _classifier(
+            session, principal.connection.id, default_model=default_model
+        ),
         "summary": await _summary(session, principal.connection),
     }
 
@@ -886,7 +1036,9 @@ async def _templates(session: AsyncSession, connection_id: int) -> dict[str, str
     return {code.value: overrides.get(code.value, DEFAULT_TEMPLATES[code]) for code in TemplateCode}
 
 
-async def _classifier(session: AsyncSession, connection_id: int) -> dict[str, Any]:
+async def _classifier(
+    session: AsyncSession, connection_id: int, *, default_model: str = DEFAULT_MODEL
+) -> dict[str, Any]:
     rows = await session.scalars(
         select(models.ClassificationDirection)
         .where(models.ClassificationDirection.connection_id == connection_id)
@@ -894,12 +1046,16 @@ async def _classifier(session: AsyncSession, connection_id: int) -> dict[str, An
     )
     stored = {row.code: row for row in rows}
     directions = []
-    for code in ("general", "money"):
+    for code in dict.fromkeys(("general", "money", *stored)):
         row = stored.get(code)
-        fallback = DEFAULT_DIRECTIONS[code]
+        fallback = DEFAULT_DIRECTIONS.get(code, DEFAULT_DIRECTIONS["general"])
         directions.append(
             {
                 "code": code,
+                "reply_template": "" if row is None else row.reply_template,
+                "priority": ("high" if code == "money" else "normal")
+                if row is None
+                else row.priority,
                 "label": fallback["label"] if row is None else row.label,
                 "description": fallback["description"] if row is None else row.description,
                 "keywords": fallback["keywords"] if row is None else list(row.keywords_json or []),
@@ -915,7 +1071,7 @@ async def _classifier(session: AsyncSession, connection_id: int) -> dict[str, An
     return {
         "directions": directions,
         "system_prompt": DEFAULT_SYSTEM_PROMPT if prompt is None else prompt.system_prompt,
-        "model": DEFAULT_MODEL if prompt is None else prompt.model,
+        "model": default_model if prompt is None else prompt.model,
         "confidence_min": str(DEFAULT_CONFIDENCE_MIN if prompt is None else prompt.confidence_min),
     }
 

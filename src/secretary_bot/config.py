@@ -31,7 +31,7 @@ class Settings:
     database_url: str = "postgresql+asyncpg://secretary:secretary@127.0.0.1:5432/secretary"
     llm_provider: str = "auto"
     openai_api_key: str | None = None
-    openai_model: str = "gpt-5-mini"
+    openai_model: str = "gpt-5.6-luna"
     anthropic_api_key: str | None = None
     classifier_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
     summary_timeout_seconds: float = 60.0
@@ -113,7 +113,7 @@ class Settings:
             database_url=database_url,
             llm_provider=llm_provider,
             openai_api_key=openai_api_key,
-            openai_model=os.getenv("OPENAI_MODEL") or "gpt-5-mini",
+            openai_model=os.getenv("OPENAI_MODEL") or "gpt-5.6-luna",
             anthropic_api_key=anthropic_api_key,
             classifier_timeout_seconds=classifier_timeout,
             summary_timeout_seconds=summary_timeout,
