@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from typing import Any, Protocol
@@ -53,6 +54,7 @@ from secretary_bot.templates import DEFAULT_TEMPLATES, TemplateCode
 MAX_MUTE_HOURS = 168
 LIVE_CONFIRMATION_TTL = timedelta(minutes=5)
 INVITE_TTL = timedelta(hours=24)
+logger = logging.getLogger(__name__)
 
 BUTTON_STATUS = ui.BUTTON_STATUS
 BUTTON_TODAY = ui.BUTTON_TODAY
@@ -193,9 +195,8 @@ class ControlPlane:
             kwargs["reply_markup"] = response.reply_markup
         await self.bot.send_message(**kwargs)
         if (
-            connection is not None
-            and access is not None
-            and access.can_process
+            access is not None
+            and access.can_connect
             and self.public_base_url
             and (_parse_command(message.text) or (None, ""))[0] == "start"
         ):
@@ -282,7 +283,32 @@ class ControlPlane:
             await self.bot.send_message(**kwargs)
         if target_notification is not None:
             chat_id, text = target_notification
-            await self.bot.send_message(chat_id=chat_id, text=text)
+            if access_action is not None and access_action[0] == "approve" and self.public_base_url:
+                try:
+                    await self.bot.set_chat_menu_button(
+                        chat_id=chat_id,
+                        menu_button=MenuButtonWebApp(
+                            text=ui.MENU_SETTINGS,
+                            web_app=WebAppInfo(url=f"{self.public_base_url.rstrip('/')}/app/"),
+                        ),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "access_approval_menu_button_failed",
+                        extra={"error_type": type(exc).__name__},
+                    )
+                await self.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                        InlineKeyboardButton(
+                            text=ui.MENU_SETTINGS,
+                            web_app=WebAppInfo(url=f"{self.public_base_url.rstrip('/')}/app/"),
+                        )
+                    ]]),
+                )
+            else:
+                await self.bot.send_message(chat_id=chat_id, text=text)
         return True
 
     async def handle_business_connection(

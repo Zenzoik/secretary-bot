@@ -209,7 +209,10 @@ async def test_master_approves_and_revokes_a_pending_candidate(database: Databas
         token = await create_access_invite(session, created_by=42, now=NOW, ttl=timedelta(hours=1))
         await consume_access_invite(session, token=token, user_id=99, username="customer", now=NOW)
     bot = FakeBot()
-    control = ControlPlane(database, bot, bot_username="secretary_test_bot")
+    control = ControlPlane(
+        database, bot, bot_username="secretary_test_bot",
+        public_base_url="https://secretary.example",
+    )
 
     assert await control.handle_message(owner_message(BUTTON_USERS), now=NOW)
     callbacks = [
@@ -230,6 +233,11 @@ async def test_master_approves_and_revokes_a_pending_candidate(database: Databas
         assert candidate is not None and candidate.status == "active"
     assert bot.edited[-1]["reply_markup"] is None
     assert "Доступ підтверджено" in bot.sent[-1]["text"]
+    assert bot.menu_buttons[-1]["chat_id"] == 99
+    assert bot.menu_buttons[-1]["menu_button"].web_app.url == "https://secretary.example/app/"
+    assert bot.sent[-1]["reply_markup"].inline_keyboard[0][0].web_app.url == (
+        "https://secretary.example/app/"
+    )
 
     queue = RecordingQueue()
     control.delayed_queue = queue  # type: ignore[assignment]
