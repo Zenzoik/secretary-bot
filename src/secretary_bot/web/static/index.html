@@ -9,10 +9,10 @@
     <meta property="og:description" content="Налаштування без зайвих кроків">
     <meta property="og:image" content="{{BASE_URL}}/assets/og.png">
     <title>Personal Secretary — налаштування</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260907-sdk-fallback1">
+    <link rel="stylesheet" href="/assets/styles.css?v=20260923-access1">
     <script id="telegram-web-app-sdk" src="https://telegram.org/js/telegram-web-app.js?59" async></script>
     <script src="/assets/ui-utils.js?v=20260907-sdk-fallback1" defer></script>
-    <script src="/assets/app.js?v=20260918-custom-type-validation1" defer></script>
+    <script src="/assets/app.js?v=20260923-access1" defer></script>
   </head>
   <body>
     <div class="app-shell" id="app" aria-busy="true">
@@ -30,6 +30,7 @@
           <button data-view="summary"><span>06</span> Підсумки</button>
           <button data-view="analytics"><span>07</span> Аналітика</button>
           <button data-view="logs"><span>08</span> Історія дій</button>
+          <button data-view="users" class="hidden" id="users-nav"><span>09</span> Користувачі</button>
         </nav>
         <div class="sidebar-footer">
           <button class="text-button browser-link-action">Відкрити у браузері</button>
@@ -306,6 +307,19 @@
               </form>
               <div class="table-wrap"><table><thead><tr><th>Час</th><th>Контакт</th><th>Дія</th><th>Тип звернення</th><th>Деталі</th></tr></thead><tbody id="log-rows"></tbody></table></div>
               <button id="more-logs" type="button" class="secondary hidden">Раніші записи</button>
+            </div>
+          </section>
+          <section class="view" data-view-panel="users">
+            <div class="panel">
+              <div class="panel-heading"><div><p class="eyebrow">Доступ</p><h2>Запрошення</h2></div></div>
+              <p class="muted">Створіть одноразове посилання та надішліть його людині. Після відкриття посилання заявка з’явиться нижче.</p>
+              <button class="primary" id="create-invite" type="button">Створити посилання</button>
+              <div id="invite-result" class="invite-result hidden"><input id="invite-url" aria-label="Посилання-запрошення" readonly><button class="secondary" id="copy-invite" type="button">Скопіювати</button></div>
+              <p class="muted">Посилання діє 24 години і доступне лише одному користувачу.</p>
+            </div>
+            <div class="panel">
+              <div class="panel-heading"><div><p class="eyebrow">Заявки та доступ</p><h2>Користувачі</h2></div><button class="secondary" id="refresh-users" type="button">Оновити</button></div>
+              <div id="access-users" class="access-users" aria-live="polite"></div>
             </div>
           </section>
         </div>

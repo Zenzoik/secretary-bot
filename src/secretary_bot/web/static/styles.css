@@ -55,6 +55,14 @@ button, label, input, select, textarea { -webkit-tap-highlight-color: transparen
 @keyframes enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .panel { padding: clamp(20px, 3vw, 32px); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
 .panel + .panel { margin-top: 18px; }
+.invite-result { display: flex; gap: 8px; margin-top: 16px; }
+.invite-result input { min-width: 0; }
+.access-users { display: grid; gap: 10px; }
+.access-user { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); }
+.access-user strong, .access-user small { display: block; overflow-wrap: anywhere; }
+.access-user small { margin-top: 4px; color: var(--muted); }
+.access-user-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 650px) { .access-user { align-items: stretch; flex-direction: column; } }
 .panel.narrow { max-width: 700px; }
 .panel-heading { display: flex; align-items: start; justify-content: space-between; gap: 18px; margin-bottom: 26px; }
 .panel h2 { margin: 5px 0 0; font-size: clamp(21px, 3vw, 28px); letter-spacing: -.025em; }

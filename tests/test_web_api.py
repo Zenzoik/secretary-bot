@@ -22,7 +22,9 @@ from secretary_bot.retention import MessageCipher
 from secretary_bot.storage import (
     ConnectionSnapshot,
     Database,
+    consume_access_invite,
     ensure_master,
+    load_access_user,
     load_contact_state,
     load_owner_connection,
     log_decision,
@@ -51,7 +53,9 @@ def headers(user_id: int = 42) -> dict[str, str]:
     return {"X-Telegram-Init-Data": signed_init_data(user_id)}
 
 
-def web_app(database: Database, *, message_encryption_key: str | None = None) -> FastAPI:
+def web_app(
+    database: Database, *, message_encryption_key: str | None = None, bot: object | None = None
+) -> FastAPI:
     app = FastAPI()
     settings = Settings(
         bot_token=TOKEN,
@@ -61,8 +65,60 @@ def web_app(database: Database, *, message_encryption_key: str | None = None) ->
         public_base_url="https://testserver",
         message_encryption_key=message_encryption_key,
     )
-    app.include_router(build_web_router(database=database, settings=settings))
+    app.include_router(build_web_router(database=database, settings=settings, bot=bot))
     return app
+
+
+@pytest.mark.asyncio
+async def test_master_manages_invites_and_approval_in_mini_app(database: Database) -> None:
+    await seed_owner(database)
+    await seed_owner(database, user_id=77)
+
+    class AccessBot:
+        def __init__(self) -> None:
+            self.menu: list[dict] = []
+            self.messages: list[dict] = []
+
+        async def set_chat_menu_button(self, **kwargs: object) -> None:
+            self.menu.append(kwargs)
+
+        async def send_message(self, **kwargs: object) -> None:
+            self.messages.append(kwargs)
+
+    bot = AccessBot()
+    async with AsyncClient(
+        transport=ASGITransport(app=web_app(database, bot=bot)), base_url="https://testserver"
+    ) as client:
+        invited = await client.post("/api/v1/access/invites", headers=headers())
+        assert invited.status_code == 200
+        assert invited.json()["url"].startswith("https://t.me/secretary_test_bot?start=invite_")
+        token = invited.json()["url"].split("invite_", 1)[1]
+        async with database.session() as session, session.begin():
+            await consume_access_invite(
+                session, token=token, user_id=99, username="candidate", now=datetime.now(UTC)
+            )
+
+        denied = await client.post("/api/v1/access/users/99/approve", headers=headers(99))
+        assert denied.status_code == 401
+        assert (await client.get("/api/v1/access/users", headers=headers(77))).status_code == 403
+        users = await client.get("/api/v1/access/users", headers=headers())
+        assert users.status_code == 200
+        assert any(
+            user["user_id"] == 99 and user["status"] == "pending"
+            for user in users.json()["users"]
+        )
+        approved = await client.post("/api/v1/access/users/99/approve", headers=headers())
+        assert approved.json() == {"approved": True, "notified": True}
+        assert (await client.get("/api/v1/bootstrap", headers=headers(99))).status_code == 409
+        assert bot.menu[0]["chat_id"] == 99
+        assert bot.messages[0]["reply_markup"].inline_keyboard[0][0].web_app.url == "https://testserver/app/"
+        repeated = await client.post("/api/v1/access/users/99/approve", headers=headers())
+        assert repeated.status_code == 409
+        revoked = await client.post("/api/v1/access/users/99/revoke", headers=headers())
+        assert revoked.json() == {"revoked": True}
+    async with database.session() as session:
+        user = await load_access_user(session, 99)
+        assert user is not None and user.status == "revoked"
 
 
 async def seed_owner(database: Database, *, user_id: int = 42, name: str = "Owner") -> int:

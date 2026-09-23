@@ -208,6 +208,8 @@ def create_app(
             settings=settings,
             summary_channel_connector=summary_channel_connector,
             language_model=language_model,
+            bot=telegram_bot,
+            delayed_queue=replies,
         )
     )
     app.mount("/assets", StaticFiles(directory=WEB_ROOT), name="web-assets")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 import secrets
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ from decimal import Decimal
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, WebAppInfo
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -18,6 +20,7 @@ from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from secretary_bot import models
+from secretary_bot import texts as ui
 from secretary_bot.actions import LogAction
 from secretary_bot.analytics import build_analytics, local_period, render_monthly_pdf
 from secretary_bot.classifier import (
@@ -35,12 +38,17 @@ from secretary_bot.outbox import retry_failed_notifications
 from secretary_bot.status import operating_status
 from secretary_bot.storage import (
     Database,
+    approve_access_user,
+    create_access_invite,
+    list_access_users,
     load_classifier_settings,
     load_connection,
     load_contact_state,
     load_forced_template_code,
+    load_owner_connection,
     load_templates,
     purge_retained_messages,
+    revoke_access_user,
     set_delivery_preferences,
 )
 from secretary_bot.summary_channel import SummaryChannelConnector, SummaryChannelError
@@ -60,6 +68,7 @@ from secretary_bot.web_auth import (
 MAX_WINDOWS = 16
 MAX_LOGS = 200
 LOG_RETENTION = timedelta(days=30)
+logger = logging.getLogger(__name__)
 
 DEFAULT_DIRECTIONS = {
     "general": {
@@ -344,8 +353,10 @@ class WebApi:
             raise _unauthorized()
 
         user = await session.get(models.AccessUser, user_id)
-        if user is None or user.status != "active" or user.onboarding_state != "ready":
+        if user is None or user.status != "active":
             raise _unauthorized()
+        if user.onboarding_state != "ready":
+            raise HTTPException(status_code=409, detail="Завершіть підключення в чаті з ботом")
         connection = await session.scalar(
             select(models.Connection)
             .where(models.Connection.owner_user_id == user_id)
@@ -365,6 +376,8 @@ def build_web_router(
     settings: Settings,
     summary_channel_connector: SummaryChannelConnector | None = None,
     language_model: LanguageModel | None = None,
+    bot: Any | None = None,
+    delayed_queue: Any | None = None,
 ) -> APIRouter:
     router = APIRouter()
     api = WebApi(database=database, settings=settings)
@@ -379,6 +392,101 @@ def build_web_router(
         async with database.session() as session, session.begin():
             principal = await api.authorize(session, request)
             return await _bootstrap(session, principal, default_model=default_model)
+
+    async def require_master(session: AsyncSession, request: Request) -> Principal:
+        principal = await api.authorize(session, request)
+        if principal.user.role != "master":
+            raise HTTPException(status_code=403, detail="Керувати доступом може лише майстер")
+        return principal
+
+    @router.get("/api/v1/access/users")
+    async def access_users(request: Request) -> dict[str, Any]:
+        async with database.session() as session:
+            await require_master(session, request)
+            users = await list_access_users(session)
+            return {"users": [
+                {"user_id": user.user_id, "username": user.username,
+                 "display_name": user.display_name, "role": user.role,
+                 "status": user.status, "onboarding_state": user.onboarding_state}
+                for user in users
+            ]}
+
+    @router.post("/api/v1/access/invites")
+    async def access_invite(request: Request) -> dict[str, str]:
+        async with database.session() as session, session.begin():
+            principal = await require_master(session, request)
+            token = await create_access_invite(
+                session, created_by=principal.user.user_id,
+                now=datetime.now(UTC), ttl=timedelta(hours=24),
+            )
+        return {"url": f"https://t.me/{settings.bot_username}?start=invite_{token}"}
+
+    @router.post("/api/v1/access/users/{user_id}/approve")
+    async def access_approve(request: Request, user_id: int) -> dict[str, bool]:
+        async with database.session() as session, session.begin():
+            principal = await require_master(session, request)
+            changed = await approve_access_user(
+                session, user_id=user_id, approved_by=principal.user.user_id,
+                now=datetime.now(UTC),
+            )
+            if not changed:
+                raise HTTPException(status_code=409, detail="Заявку вже оброблено")
+        delivered = False
+        if bot is not None:
+            kwargs: dict[str, Any] = {"chat_id": user_id, "text": ui.USER_APPROVED_NOTICE}
+            if settings.public_base_url:
+                web_app = WebAppInfo(url=f"{settings.public_base_url.rstrip('/')}/app/")
+                try:
+                    await bot.set_chat_menu_button(
+                        chat_id=user_id,
+                        menu_button=MenuButtonWebApp(text=ui.MENU_SETTINGS, web_app=web_app),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "access_approval_menu_button_failed",
+                        extra={"error_type": type(exc).__name__},
+                    )
+                kwargs["reply_markup"] = InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text=ui.MENU_SETTINGS, web_app=web_app)
+                ]])
+            try:
+                await bot.send_message(**kwargs)
+                delivered = True
+            except Exception as exc:
+                logger.warning(
+                    "access_approval_telegram_notification_failed",
+                    extra={"error_type": type(exc).__name__},
+                )
+        return {"approved": True, "notified": delivered}
+
+    @router.post("/api/v1/access/users/{user_id}/revoke")
+    async def access_revoke(request: Request, user_id: int) -> dict[str, bool]:
+        async with database.session() as session, session.begin():
+            principal = await require_master(session, request)
+            connection = await load_owner_connection(session, user_id)
+            changed = await revoke_access_user(
+                session, user_id=user_id, revoked_by=principal.user.user_id,
+                now=datetime.now(UTC),
+            )
+            if not changed:
+                raise HTTPException(status_code=409, detail="Користувача не знайдено")
+        if connection is not None and delayed_queue is not None:
+            try:
+                await delayed_queue.cancel_connection(connection.id)
+            except Exception as exc:
+                logger.warning(
+                    "access_revocation_queue_cancel_failed",
+                    extra={"error_type": type(exc).__name__},
+                )
+        if bot is not None:
+            try:
+                await bot.send_message(chat_id=user_id, text=ui.USER_REVOKED_NOTICE)
+            except Exception as exc:
+                logger.warning(
+                    "access_revocation_telegram_notification_failed",
+                    extra={"error_type": type(exc).__name__},
+                )
+        return {"revoked": True}
 
     @router.post("/api/v1/control")
     async def control(request: Request, payload: ControlPayload) -> dict[str, Any]:

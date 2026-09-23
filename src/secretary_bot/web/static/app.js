@@ -12,7 +12,7 @@
   const titles = {
     overview: "Огляд", schedule: "Розклад", contacts: "Контакти",
     templates: "Шаблони", classifier: "Типи звернень", summary: "Підсумки",
-    analytics: "Аналітика", logs: "Історія дій",
+    analytics: "Аналітика", logs: "Історія дій", users: "Користувачі",
   };
   const actions = ["replied", "dry_run", "skipped_schedule", "skipped_excluded", "skipped_owner_replied", "skipped_window_limit", "skipped_kill_switch", "skipped_inactive", "skipped_unsupported_content", "error"];
   const actionLabels = {
@@ -201,6 +201,23 @@
     if (view === "contacts") loadContacts();
     if (view === "analytics") loadAnalytics();
     if (view === "logs") loadLogs();
+    if (view === "users") loadUsers();
+  }
+
+  async function loadUsers() {
+    const container = $("#access-users");
+    container.textContent = "Завантаження…";
+    try {
+      const { users } = await api("/api/v1/access/users");
+      const labels = { pending: "Очікує підтвердження", active: "Доступ активний", revoked: "Доступ відкликано" };
+      container.innerHTML = users.map(user => `<div class="access-user">
+        <div><strong>${escapeHtml(user.display_name || (user.username ? `@${user.username}` : `ID ${user.user_id}`))}</strong>
+          <small>ID ${user.user_id} · ${escapeHtml(labels[user.status] || user.status)}${user.role === "master" ? " · Майстер" : ""}</small></div>
+        <div class="access-user-actions">${user.role === "master" ? "" : user.status === "pending"
+          ? `<button class="primary" data-access-action="approve" data-user-id="${user.user_id}" type="button">Підтвердити</button><button class="danger-button" data-access-action="revoke" data-user-id="${user.user_id}" type="button">Відхилити</button>`
+          : user.status === "active" ? `<button class="danger-button" data-access-action="revoke" data-user-id="${user.user_id}" type="button">Відкликати</button>` : ""}</div>
+      </div>`).join("") || "Поки немає користувачів.";
+    } catch (error) { container.textContent = error.message; toast(error.message, true); }
   }
 
   function renderStatus() {
@@ -681,6 +698,28 @@
       renderStatus(); toast("Стан оновлено");
     })));
     $$("[data-view]").forEach((button) => button.addEventListener("click", () => navigate(button.dataset.view)));
+    $("#create-invite").addEventListener("click", (event) => withBusyButton(event.currentTarget, "Створюємо…", async () => {
+      const result = await api("/api/v1/access/invites", { method: "POST" });
+      $("#invite-url").value = result.url;
+      $("#invite-result").classList.remove("hidden");
+      toast("Посилання створено");
+    }));
+    $("#copy-invite").addEventListener("click", async () => {
+      try { await copyText($("#invite-url").value); toast("Посилання скопійовано"); }
+      catch (error) { toast(error.message, true); }
+    });
+    $("#refresh-users").addEventListener("click", loadUsers);
+    $("#access-users").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-access-action]");
+      if (!button) return;
+      const action = button.dataset.accessAction;
+      if (action === "revoke" && !window.confirm("Відкликати доступ цього користувача?")) return;
+      withBusyButton(button, "Змінюємо…", async () => {
+        const result = await api(`/api/v1/access/users/${button.dataset.userId}/${action}`, { method: "POST" });
+        toast(action === "approve" ? (result.notified ? "Доступ підтверджено, користувача сповіщено" : "Доступ підтверджено. Не вдалося сповістити користувача") : "Доступ відкликано", action === "approve" && !result.notified);
+        await loadUsers();
+      });
+    });
     ["delay_min_seconds", "delay_max_seconds", "bot_delay_seconds"].forEach((name) => {
       $("#delivery-form").elements[name].addEventListener("input", renderDelayRanges);
     });
@@ -874,13 +913,17 @@
       if (error.status === 401 || error.status === 403) $("#auth-state").classList.remove("hidden");
       else {
         $("#load-error").classList.remove("hidden");
-        $("#load-error-message").textContent = error.status === 409 ? "Завершіть підключення в чаті з ботом." : "Перевірте інтернет-з’єднання та повторіть завантаження.";
+        if (error.status === 409) $("#load-error h2").textContent = "Завершіть підключення";
+        $("#load-error-message").textContent = error.status === 409
+          ? "Підключіть бота в Chat Automation. Після підключення бот проведе вас через решту налаштувань."
+          : "Перевірте інтернет-з’єднання та повторіть завантаження.";
       }
       $("#app").setAttribute("aria-busy", "false");
       return;
     }
     $("#loading-state").classList.add("hidden");
     $("#views").classList.remove("hidden");
+    $("#users-nav").classList.toggle("hidden", state.bootstrap.user.role !== "master");
     if (!tg?.initData) $("#logout").classList.remove("hidden");
     renderStatus(); fillDelivery(); fillEscalation(); fillSchedule(); fillTemplates(); fillClassifier(); fillSummary();
     const requested = location.hash.slice(1);

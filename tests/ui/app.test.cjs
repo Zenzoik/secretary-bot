@@ -47,6 +47,32 @@ test('expired session shows authentication guidance',async t=>{
   const w=await screen(t,{status:401});
   assert.equal(w.document.querySelector('#auth-state').classList.contains('hidden'),false);
 });
+test('approved user sees the connection step before settings unlock',async t=>{
+  const w=await screen(t,{status:409});
+  assert.equal(w.document.querySelector('#load-error h2').textContent,'Завершіть підключення');
+  assert.match(w.document.querySelector('#load-error-message').textContent,/Chat Automation/);
+});
+test('master can create an invite and approve a pending user in the mini app',async t=>{
+  const calls=[];
+  const w=await screen(t,{handler:(path,options)=>{
+    if(path==='/api/v1/access/users') return response({users:[
+      {user_id:42,role:'master',status:'active',display_name:'Owner'},
+      {user_id:99,role:'user',status:'pending',display_name:'Candidate'}
+    ]});
+    if(path==='/api/v1/access/invites') return response({url:'https://t.me/test_bot?start=invite_token'});
+    if(path==='/api/v1/access/users/99/approve'){
+      calls.push(options.method);return response({approved:true,notified:true});
+    }
+  }});
+  const nav=w.document.querySelector('#users-nav');
+  assert.equal(nav.classList.contains('hidden'),false);
+  nav.click(); await tick();
+  assert.match(w.document.querySelector('#access-users').textContent,/Candidate/);
+  w.document.querySelector('#create-invite').click(); await tick();
+  assert.equal(w.document.querySelector('#invite-url').value,'https://t.me/test_bot?start=invite_token');
+  w.document.querySelector('[data-access-action=approve]').click(); await tick(); await tick();
+  assert.deepEqual(calls,['POST']);
+});
 test('pause overrides live badge, and bot range matches the actual 60-second cap',async t=>{
   const data=structuredClone(base); data.connection.dry_run=false;
   data.status={...data.status,code:'paused',label:'Тимчасова пауза'};
