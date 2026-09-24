@@ -179,6 +179,71 @@ from a verified backup if the migration partially changed data. PostgreSQL DDL
 migrations are expected to be transactional, but each migration must still be
 reviewed.
 
+## Rollback: new-contact setup rule (migration `20260924_0026`)
+
+Commit `eca5a8e` makes the bot stay silent to a contact until the owner saves
+its card in the Mini App or picks a rule in Manage Bot. Existing contacts were
+marked as reviewed by the migration. The previous release is `84294b1`
+(Alembic `20260917_0025`).
+
+Pre-deploy backup on the VPS (custom format, mode `0600`, 26 tables):
+
+```text
+tmp/secretary-bot-pre-20260924_0026-20260924T175847Z.dump
+SHA-256: 081c8bf6e061b5e3ccf57d1c2c0d0de8b0f296e6762b80dc2818ef10b08deedb
+```
+
+### Level 1: switch the rule off (preferred, no code or schema change)
+
+The bot immediately answers new contacts by the general rules again, sends no
+setup notices, and the Mini App stops marking contacts as not configured. The
+change only touches `.env`; do not print the file.
+
+```bash
+cd /root/secretary-bot
+grep -q '^REQUIRE_CONTACT_SETUP=' .env \
+  && sed -i 's/^REQUIRE_CONTACT_SETUP=.*/REQUIRE_CONTACT_SETUP=false/' .env \
+  || echo 'REQUIRE_CONTACT_SETUP=false' >> .env
+docker compose up -d app
+docker compose exec -T app printenv REQUIRE_CONTACT_SETUP
+curl --fail http://127.0.0.1:18080/readyz
+curl --fail https://bot.linkoid.net/readyz
+```
+
+To turn it back on, set the value to `true` and run the same commands. Contacts
+that first wrote while the rule was off have no review mark and would become
+silent (each owner gets one notice). To keep answering them, mark them before
+switching the rule on:
+
+```bash
+docker compose exec -T postgres psql -U secretary -d secretary -c \
+  "UPDATE contact_activity SET configured_at = now() WHERE configured_at IS NULL"
+```
+
+### Level 2: full code and schema rollback
+
+Use only if Level 1 is not enough. The downgrade must run while the new image,
+which still contains the migration, is present. It drops the two new
+`contact_activity` columns and deletes `skipped_unconfigured` log rows; all
+other data stays. No dump restore is needed.
+
+```bash
+cd /root/secretary-bot
+docker compose stop app
+docker compose run --rm migrate alembic downgrade 20260917_0025
+git checkout 84294b1          # emergency: detached HEAD on the previous release
+docker compose up -d --build
+docker compose exec -T postgres psql -U secretary -d secretary -Atc \
+  "SELECT version_num FROM alembic_version"   # expect 20260917_0025
+```
+
+Then run the health checks and verify the webhook. Afterwards revert the
+feature commit locally, push `main`, and return the server to the branch with
+`git checkout main && git pull --ff-only`, so it does not stay detached.
+
+Restoring the dump replaces production data and requires explicit authorization
+(see `AGENTS.md`); it is not part of this rollback.
+
 ## Backup and transfer snapshot
 
 The initial VPS deployment was restored from the encrypted full-transfer package:
