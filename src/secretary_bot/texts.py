@@ -160,6 +160,14 @@ CONNECTION_LOST_ALERT = (
 )
 
 
+def new_contact_alert(label: str) -> str:
+    return (
+        f"🆕 Новий контакт: {label}. Бот йому не відповідає, доки ви не налаштуєте контакт. "
+        f"Відкрийте панель кнопкою «{MENU_SETTINGS}» біля поля вводу → «Контакти», "
+        "перевірте правила й натисніть «Зберегти контакт»."
+    )
+
+
 def as_bot_reply(text: str) -> str:
     """Add attribution that is visible in every Telegram client."""
     return f"{text}\n\n{BOT_IDENTITY_SUFFIX}"
@@ -261,6 +269,7 @@ def render_today(counts: list[tuple[str, str | None, int]], *, local_date: str) 
         "dry_run": "показано чернеток",
         "skipped_schedule": "пропущено в робочий час",
         "skipped_excluded": "пропущено за правилом контакту",
+        "skipped_unconfigured": "нові контакти чекають на налаштування",
         "skipped_owner_replied": "власник відповів сам",
         "skipped_window_limit": "досягнуто ліміт відповідей",
         "skipped_kill_switch": "секретаря вимкнено",

@@ -80,6 +80,20 @@ def test_temporary_exclusion_applies_until_its_deadline() -> None:
     )
 
 
+def test_contact_the_owner_has_not_reviewed_gets_no_reply() -> None:
+    result = evaluate_gate(policy(), ContactState(configured=False), now=INSIDE_NIGHT)
+
+    assert result.decision is GateDecision.SKIPPED_UNCONFIGURED
+
+
+def test_exclusion_is_reported_before_missing_setup() -> None:
+    contact = ContactState(exclusion=Exclusion(), configured=False)
+
+    assert evaluate_gate(policy(), contact, now=INSIDE_NIGHT).decision is (
+        GateDecision.SKIPPED_EXCLUDED
+    )
+
+
 def test_expired_exclusion_no_longer_blocks() -> None:
     contact = ContactState(exclusion=Exclusion(until=INSIDE_NIGHT - timedelta(seconds=1)))
 

@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 from aiogram.types import CallbackQuery, Message
+from sqlalchemy import select
 
 from secretary_bot import models
 from secretary_bot.actions import LogAction
@@ -560,6 +561,10 @@ async def test_contact_card_can_force_a_template(database: Database) -> None:
         assert override is not None and override.mode == "force_template"
         template = await session.get(models.Template, override.template_id)
         assert template is not None and template.code == "money_priority"
+        # A rule chosen for the contact counts as reviewing it: the bot may answer.
+        activity = await session.scalar(select(models.ContactActivity))
+        assert activity is not None and activity.contact_id == 100
+        assert activity.configured_at is not None
 
 
 @pytest.mark.asyncio

@@ -339,6 +339,7 @@ async def test_schedule_rows_become_the_gate_policy(session: AsyncSession) -> No
                 time_to=time(13, 0),
                 is_active=False,
             ),
+            models.ContactActivity(connection_id=connection_id, contact_id=100, configured_at=NOW),
         ]
     )
     await session.flush()

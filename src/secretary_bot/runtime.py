@@ -272,14 +272,18 @@ async def _store_connection(
 
 def _contact_name(message: Message) -> str | None:
     sender = message.from_user
-    if sender is None:
-        return message.chat.first_name
+    if sender is None or sender.id != message.chat.id:
+        # The owner's own message: in a private chat the chat is the other person.
+        chat = message.chat
+        return " ".join(part for part in (chat.first_name, chat.last_name) if part) or None
     return sender.full_name
 
 
 def _contact_username(message: Message) -> str | None:
     sender = message.from_user
-    return sender.username if sender is not None else message.chat.username
+    if sender is None or sender.id != message.chat.id:
+        return message.chat.username
+    return sender.username
 
 
 def _log_connection(

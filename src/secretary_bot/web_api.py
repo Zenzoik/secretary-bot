@@ -47,6 +47,7 @@ from secretary_bot.storage import (
     load_forced_template_code,
     load_owner_connection,
     load_templates,
+    mark_contact_configured,
     purge_retained_messages,
     revoke_access_user,
     set_delivery_preferences,
@@ -533,7 +534,12 @@ def build_web_router(
             connection = await load_connection(session, principal.connection.business_connection_id)
             assert connection is not None
             contact = (
-                await load_contact_state(session, connection.id, payload.contact_id)
+                await load_contact_state(
+                    session,
+                    connection.id,
+                    payload.contact_id,
+                    require_setup=settings.require_contact_setup,
+                )
                 if payload.contact_id is not None
                 else ContactState()
             )
@@ -636,7 +642,13 @@ def build_web_router(
     ) -> dict[str, Any]:
         async with database.session() as session, session.begin():
             principal = await api.authorize(session, request)
-            items = await _contacts(session, principal.connection.id, search=search, offset=offset)
+            items = await _contacts(
+                session,
+                principal.connection.id,
+                search=search,
+                offset=offset,
+                require_setup=settings.require_contact_setup,
+            )
             return {"items": items[:100], "has_more": len(items) > 100, "next_offset": offset + 100}
 
     @router.put("/api/v1/contacts/{contact_id}")
@@ -661,7 +673,15 @@ def build_web_router(
                 contact_name=activity.contact_name,
                 payload=payload,
             )
-            return await _contact(session, principal.connection.id, contact_id)
+            await mark_contact_configured(
+                session, principal.connection.id, contact_id, at=datetime.now(UTC)
+            )
+            return await _contact(
+                session,
+                principal.connection.id,
+                contact_id,
+                require_setup=settings.require_contact_setup,
+            )
 
     @router.put("/api/v1/templates")
     async def update_templates(request: Request, payload: TemplatesPayload) -> dict[str, Any]:
@@ -1210,7 +1230,12 @@ async def _summary(session: AsyncSession, connection: models.Connection) -> dict
 
 
 async def _contacts(
-    session: AsyncSession, connection_id: int, *, search: str, offset: int = 0
+    session: AsyncSession,
+    connection_id: int,
+    *,
+    search: str,
+    offset: int = 0,
+    require_setup: bool = True,
 ) -> list[dict[str, Any]]:
     query = select(models.ContactActivity).where(
         models.ContactActivity.connection_id == connection_id
@@ -1223,27 +1248,29 @@ async def _contacts(
                 models.ContactActivity.contact_username.icontains(needle, autoescape=True),
             )
         )
-    rows = list(
-        await session.scalars(
-            query.order_by(
-                models.ContactActivity.last_incoming_at.desc(), models.ContactActivity.contact_id
-            )
-            .offset(offset)
-            .limit(101)
-        )
-    )
-    return await _contact_rows(session, connection_id, rows)
+    order = [
+        models.ContactActivity.last_incoming_at.desc().nulls_last(),
+        models.ContactActivity.contact_id,
+    ]
+    if require_setup:
+        # Contacts waiting for setup come first: the bot is silent towards them.
+        order.insert(0, models.ContactActivity.configured_at.is_(None).desc())
+    rows = list(await session.scalars(query.order_by(*order).offset(offset).limit(101)))
+    return await _contact_rows(session, connection_id, rows, require_setup=require_setup)
 
 
-async def _contact(session: AsyncSession, connection_id: int, contact_id: int) -> dict[str, Any]:
+async def _contact(
+    session: AsyncSession, connection_id: int, contact_id: int, *, require_setup: bool = True
+) -> dict[str, Any]:
     activity = await session.get(models.ContactActivity, (connection_id, contact_id))
     if activity is None:
         raise HTTPException(status_code=404, detail="Контакт не знайдено")
-    return (await _contact_rows(session, connection_id, [activity]))[0]
+    rows = await _contact_rows(session, connection_id, [activity], require_setup=require_setup)
+    return rows[0]
 
 
 async def _contact_rows(
-    session: AsyncSession, connection_id: int, rows: list
+    session: AsyncSession, connection_id: int, rows: list, *, require_setup: bool = True
 ) -> list[dict[str, Any]]:
     if not rows:
         return []
@@ -1294,6 +1321,7 @@ async def _contact_rows(
                 "contact_name": activity.contact_name,
                 "contact_username": activity.contact_username,
                 "contact_label": contact_label(activity.contact_name, activity.contact_username),
+                "configured": not require_setup or activity.configured_at is not None,
                 "last_incoming_at": _iso(activity.last_incoming_at),
                 "last_auto_reply_at": _iso(activity.last_auto_reply_at),
                 "auto_reply_count": counts.get((contact_id, "replied"), 0),

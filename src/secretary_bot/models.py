@@ -332,6 +332,9 @@ class ContactActivity(Base):
     quiet_window_reply_count: Mapped[int] = mapped_column(Integer, server_default=sql_text("0"))
     off_hours_request_count: Mapped[int] = mapped_column(Integer, server_default=sql_text("0"))
     paid_escalation_count: Mapped[int] = mapped_column(Integer, server_default=sql_text("0"))
+    # Set when the owner first saves the contact's rules; until then the bot stays silent.
+    configured_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
+    setup_alert_sent_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
 
 
 class ContactRequest(Base):

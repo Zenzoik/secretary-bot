@@ -89,6 +89,7 @@ def create_app(
         model=language_model,
         classifier_defaults=ClassifierSettings(timeout_seconds=settings.classifier_timeout_seconds),
         message_cipher=message_cipher,
+        require_contact_setup=settings.require_contact_setup,
     )
     daily_summary = DailySummary(
         database=connection_database,

@@ -12,6 +12,7 @@ class LogAction(StrEnum):
     SKIPPED_INACTIVE = "skipped_inactive"
     SKIPPED_KILL_SWITCH = "skipped_kill_switch"
     SKIPPED_EXCLUDED = "skipped_excluded"
+    SKIPPED_UNCONFIGURED = "skipped_unconfigured"
     SKIPPED_SCHEDULE = "skipped_schedule"
     SKIPPED_WINDOW_LIMIT = "skipped_window_limit"
     SKIPPED_OWNER_REPLIED = "skipped_owner_replied"

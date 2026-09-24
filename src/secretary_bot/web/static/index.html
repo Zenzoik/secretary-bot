@@ -9,10 +9,10 @@
     <meta property="og:description" content="Налаштування без зайвих кроків">
     <meta property="og:image" content="{{BASE_URL}}/assets/og.png">
     <title>Personal Secretary — налаштування</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260923-access1">
+    <link rel="stylesheet" href="/assets/styles.css?v=20260924-contact-setup1">
     <script id="telegram-web-app-sdk" src="https://telegram.org/js/telegram-web-app.js?59" async></script>
     <script src="/assets/ui-utils.js?v=20260907-sdk-fallback1" defer></script>
-    <script src="/assets/app.js?v=20260923-access1" defer></script>
+    <script src="/assets/app.js?v=20260924-contact-setup1" defer></script>
   </head>
   <body>
     <div class="app-shell" id="app" aria-busy="true">
@@ -157,6 +157,7 @@
                   <div id="contact-empty">Оберіть контакт, щоб змінити правила.</div>
                   <div id="contact-fields" class="hidden">
                     <p class="eyebrow">Контакт</p><h3 id="contact-title"></h3><p class="muted" id="contact-meta"></p>
+                    <p class="neutral hidden" id="contact-setup-note">Новий контакт: бот не відповідає йому, доки ви не збережете правила. Перевірте режим і розклад та натисніть «Зберегти контакт».</p>
                     <fieldset><legend>Режим відповідей</legend>
                       <label><input type="radio" name="exclusion" value="none"> Відповідати за розкладом нижче</label>
                       <label><input type="radio" name="exclusion" value="until"> Призупинити до дати</label>

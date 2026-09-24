@@ -14,10 +14,10 @@
     templates: "Шаблони", classifier: "Типи звернень", summary: "Підсумки",
     analytics: "Аналітика", logs: "Історія дій", users: "Користувачі",
   };
-  const actions = ["replied", "dry_run", "skipped_schedule", "skipped_excluded", "skipped_owner_replied", "skipped_window_limit", "skipped_kill_switch", "skipped_inactive", "skipped_unsupported_content", "error"];
+  const actions = ["replied", "dry_run", "skipped_schedule", "skipped_excluded", "skipped_unconfigured", "skipped_owner_replied", "skipped_window_limit", "skipped_kill_switch", "skipped_inactive", "skipped_unsupported_content", "error"];
   const actionLabels = {
     replied: "Відповів", dry_run: "Прев’ю", skipped_schedule: "Поза розкладом",
-    skipped_excluded: "Виключено", skipped_owner_replied: "Власник відповів",
+    skipped_excluded: "Виключено", skipped_unconfigured: "Новий контакт, не налаштований", skipped_owner_replied: "Власник відповів",
     skipped_window_limit: "Ліміт вікна", skipped_kill_switch: "Вимкнено",
     skipped_inactive: "Неактивне", skipped_unsupported_content: "Непідтримуване", error: "Помилка",
   };
@@ -492,10 +492,10 @@
   function renderContacts() {
     const list = $("#contact-list");
     if (!state.contacts.length) {
-      list.innerHTML = `<div class="empty-row">${$("#contact-search").value.trim() ? "Контактів за цим пошуком немає. Спробуйте інше ім’я або @username." : "Контакти з’являться після першого вхідного повідомлення."}</div>`;
+      list.innerHTML = `<div class="empty-row">${$("#contact-search").value.trim() ? "Контактів за цим пошуком немає. Спробуйте інше ім’я або @username." : "Контакт з’явиться після першого повідомлення в чаті — вашого або співрозмовника."}</div>`;
       return;
     }
-    list.innerHTML = state.contacts.map((contact) => `<button type="button" class="contact-item ${state.selectedContact?.contact_id === contact.contact_id ? "active" : ""}" data-contact-id="${contact.contact_id}"><strong>${escapeHtml(contactName(contact))}</strong><small>Останнє повідомлення: ${formatDate(contact.last_incoming_at)} · за 30 днів: ${contact.auto_reply_count} відповідей, ${contact.preview_count || 0} прев’ю · за весь час платних звернень: ${contact.paid_escalation_count} із ${contact.off_hours_request_count}</small></button>`).join("");
+    list.innerHTML = state.contacts.map((contact) => `<button type="button" class="contact-item ${state.selectedContact?.contact_id === contact.contact_id ? "active" : ""} ${contact.configured ? "" : "needs-setup"}" data-contact-id="${contact.contact_id}"><strong>${escapeHtml(contactName(contact))}</strong>${contact.configured ? "" : '<small class="neutral">Не налаштовано — бот не відповідає</small>'}<small>Останнє повідомлення: ${formatDate(contact.last_incoming_at)} · за 30 днів: ${contact.auto_reply_count} відповідей, ${contact.preview_count || 0} прев’ю · за весь час платних звернень: ${contact.paid_escalation_count} із ${contact.off_hours_request_count}</small></button>`).join("");
     $$(".contact-item", list).forEach((button) => button.addEventListener("click", () => selectContact(Number(button.dataset.contactId))));
   }
 
@@ -522,6 +522,7 @@
     $("#contact-empty").classList.add("hidden");
     $("#contact-fields").classList.remove("hidden");
     $("#contact-title").textContent = contactName(contact);
+    $("#contact-setup-note").classList.toggle("hidden", Boolean(contact.configured));
     renderContactMeta(contact);
     $(`input[name=exclusion][value=${contact.exclusion}]`, form).checked = true;
     form.dataset.exclusionOriginal = contact.exclusion_until || "";

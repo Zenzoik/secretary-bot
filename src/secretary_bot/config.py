@@ -36,6 +36,8 @@ class Settings:
     classifier_timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
     summary_timeout_seconds: float = 60.0
     message_encryption_key: str | None = None
+    # Rollback switch: false restores answering new contacts before the owner reviews them.
+    require_contact_setup: bool = True
 
     @property
     def webhook_url(self) -> str:
@@ -118,6 +120,7 @@ class Settings:
             classifier_timeout_seconds=classifier_timeout,
             summary_timeout_seconds=summary_timeout,
             message_encryption_key=message_encryption_key,
+            require_contact_setup=_parse_bool("REQUIRE_CONTACT_SETUP", default=True),
         )
 
 
@@ -155,6 +158,17 @@ def _parse_positive_int(name: str, *, default: int | None = None, required: bool
     if value < 1:
         raise ConfigurationError(f"{name} must be positive")
     return value
+
+
+def _parse_bool(name: str, *, default: bool) -> bool:
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"true", "1", "yes"}:
+        return True
+    if raw in {"false", "0", "no"}:
+        return False
+    raise ConfigurationError(f"{name} must be true or false")
 
 
 def _parse_chat_ids(raw: str) -> frozenset[int]:

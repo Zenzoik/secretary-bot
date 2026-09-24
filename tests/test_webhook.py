@@ -473,10 +473,44 @@ def test_incoming_message_is_gated_and_never_echoed(world) -> None:
         assert post_update(client, INCOMING_UPDATE).status_code == 200
         wait_for(lambda: client.app.state.runtime.processed_updates == 2)
 
-    # No schedule exists yet, so the gate refuses and nothing is sent.
+    # The owner has not reviewed this contact yet: no reply, one notice to the owner.
     assert bot.sent == []
     row = asyncio.run(_first(database, models.MessageLog))
-    assert row is not None and row.action == "skipped_schedule"
+    assert row is not None and row.action == "skipped_unconfigured"
+    alerts = client.app.state.test_notifier.alerts
+    assert len(alerts) == 1 and alerts[0][0] == 42 and "Contact" in alerts[0][1]
+
+
+def test_owner_message_creates_the_contact_card_with_the_contacts_name(world) -> None:
+    client, bot, _, database = world
+    owner_first = {
+        "update_id": 2,
+        "business_message": {
+            "message_id": 10,
+            "date": 1_700_000_001,
+            "business_connection_id": "connection-1",
+            "chat": {
+                "id": 100,
+                "type": "private",
+                "first_name": "Вова",
+                "last_name": "Бублик",
+                "username": "vova",
+            },
+            "from": {"id": 42, "is_bot": False, "first_name": "Owner", "username": "owner"},
+            "text": "привіт",
+        },
+    }
+
+    with client:
+        assert post_update(client, CONNECTION_UPDATE).status_code == 200
+        assert post_update(client, owner_first).status_code == 200
+        wait_for(lambda: client.app.state.runtime.processed_updates == 2)
+
+    card = asyncio.run(_first(database, models.ContactActivity))
+    assert card is not None
+    assert (card.contact_name, card.contact_username) == ("Вова Бублик", "vova")
+    assert card.configured_at is None and card.last_incoming_at is None
+    assert bot.sent == [] and client.app.state.test_notifier.alerts == []
 
 
 def test_message_body_is_not_logged(world, caplog: Any) -> None:

@@ -702,7 +702,7 @@ async def load_forced_template_code(
 
 
 async def load_contact_state(
-    session: AsyncSession, connection_id: int, contact_id: int
+    session: AsyncSession, connection_id: int, contact_id: int, *, require_setup: bool = True
 ) -> ContactState:
     exclusion_row = await session.scalar(
         select(models.Exclusion).where(
@@ -732,6 +732,8 @@ async def load_contact_state(
         last_auto_reply_window_key=None if activity is None else activity.quiet_window_key,
         auto_reply_count_in_window=(0 if activity is None else activity.quiet_window_reply_count),
         windows=windows,
+        configured=not require_setup
+        or (activity is not None and activity.configured_at is not None),
     )
 
 
@@ -1004,13 +1006,18 @@ async def record_incoming(
     contact_name: str | None = None,
     contact_username: str | None = None,
 ) -> None:
-    values: dict[str, object] = {"last_incoming_at": at}
+    values = _identity(contact_name, contact_username)
+    await _touch_activity(session, connection_id, contact_id, last_incoming_at=at, **values)
+
+
+def _identity(contact_name: str | None, contact_username: str | None) -> dict[str, object]:
+    values: dict[str, object] = {}
     if contact_name:
         values["contact_name"] = contact_name[:200]
     normalized_username = normalize_contact_username(contact_username)
     if normalized_username:
         values["contact_username"] = normalized_username
-    await _touch_activity(session, connection_id, contact_id, **values)
+    return values
 
 
 async def record_off_hours_request(
@@ -1102,9 +1109,42 @@ def normalize_contact_username(username: str | None) -> str | None:
 
 
 async def record_owner_reply(
+    session: AsyncSession,
+    connection_id: int,
+    contact_id: int,
+    *,
+    at: datetime,
+    contact_name: str | None = None,
+    contact_username: str | None = None,
+) -> None:
+    """The owner wrote in the chat; the first such message creates the contact card."""
+    values = _identity(contact_name, contact_username)
+    await _touch_activity(session, connection_id, contact_id, owner_last_reply_at=at, **values)
+
+
+async def mark_contact_configured(
     session: AsyncSession, connection_id: int, contact_id: int, *, at: datetime
 ) -> None:
-    await _touch_activity(session, connection_id, contact_id, owner_last_reply_at=at)
+    """An explicit rule from the owner counts as reviewing the contact."""
+    activity = await session.get(models.ContactActivity, (connection_id, contact_id))
+    if activity is None:
+        activity = models.ContactActivity(connection_id=connection_id, contact_id=contact_id)
+        session.add(activity)
+    if activity.configured_at is None:
+        activity.configured_at = at
+    await session.flush()
+
+
+async def claim_setup_alert(
+    session: AsyncSession, connection_id: int, contact_id: int, *, at: datetime
+) -> bool:
+    """True exactly once per contact: the owner hears about a new contact one time."""
+    activity = await session.get(models.ContactActivity, (connection_id, contact_id))
+    if activity is None or activity.setup_alert_sent_at is not None:
+        return False
+    activity.setup_alert_sent_at = at
+    await session.flush()
+    return True
 
 
 async def claim_window(

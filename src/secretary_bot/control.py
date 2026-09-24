@@ -38,6 +38,7 @@ from secretary_bot.storage import (
     load_access_user,
     load_contact_card,
     load_owner_connection,
+    mark_contact_configured,
     request_live_confirmation,
     revoke_access_user,
     set_connection_control,
@@ -590,6 +591,7 @@ class ControlPlane:
                 until=None,
                 reason="owner_card_permanent",
             )
+            await mark_contact_configured(session, connection.id, contact_id, at=now)
             return ControlResponse(ui.CONTACT_EXCLUDED)
         if action == "today":
             zone = ZoneInfo(connection.policy.timezone)
@@ -602,6 +604,7 @@ class ControlPlane:
                 until=until.astimezone(UTC),
                 reason="owner_card_today",
             )
+            await mark_contact_configured(session, connection.id, contact_id, at=now)
             return ControlResponse(ui.contact_excluded_until(until))
         if action == "templates":
             return ControlResponse(ui.CONTACT_TEMPLATE_PROMPT, _template_keyboard(contact_id))
@@ -614,6 +617,7 @@ class ControlPlane:
                 template_code=code.value,
                 template_text=DEFAULT_TEMPLATES[code],
             )
+            await mark_contact_configured(session, connection.id, contact_id, at=now)
             return ControlResponse(ui.contact_template_selected(code.value))
         return None
 

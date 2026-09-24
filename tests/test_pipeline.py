@@ -86,6 +86,15 @@ async def world(database: Database):
                 time_to=time(8, 0),
             )
         )
+        # Contacts the owner has already reviewed; a brand-new one gets no reply.
+        session.add_all(
+            [
+                models.ContactActivity(
+                    connection_id=record.id, contact_id=contact_id, configured_at=NIGHT
+                )
+                for contact_id in (100, 101)
+            ]
+        )
 
     bot = FakeBot()
     notifier = FakeNotifier()
@@ -259,6 +268,66 @@ async def test_contact_template_override_wins_over_classification(world) -> None
 
 
 @pytest.mark.asyncio
+async def test_new_contact_is_not_answered_until_the_owner_saves_its_rules(world) -> None:
+    pipeline, bot, notifier, database = world
+
+    await pipeline.process_incoming(message(chat_id=555, contact_name="Вова"))
+    await pipeline.process_incoming(message(chat_id=555, message_id=8, contact_name="Вова"))
+
+    assert await scheduled(pipeline) == []
+    assert bot.sent == []
+    assert await actions(database) == ["skipped_unconfigured", "skipped_unconfigured"]
+    assert len(notifier.alerts) == 1  # one notice per contact, not per message
+    assert notifier.alerts[0][0] == 42 and "Вова" in notifier.alerts[0][1]
+
+    async with database.session() as session, session.begin():
+        card = await session.scalar(
+            select(models.ContactActivity).where(models.ContactActivity.contact_id == 555)
+        )
+        assert card is not None and card.contact_name == "Вова"
+        card.configured_at = NIGHT
+    await pipeline.process_incoming(message(chat_id=555, message_id=9, contact_name="Вова"))
+
+    assert len(await scheduled(pipeline)) == 1
+    assert len(notifier.alerts) == 1
+
+
+@pytest.mark.asyncio
+async def test_disabled_setup_rule_answers_new_contacts_as_before(world) -> None:
+    pipeline, _, notifier, database = world
+    pipeline.require_contact_setup = False
+
+    await pipeline.process_incoming(message(chat_id=555))
+
+    assert len(await scheduled(pipeline)) == 1
+    assert "skipped_unconfigured" not in await actions(database)
+    assert notifier.alerts == []
+
+
+@pytest.mark.asyncio
+async def test_owner_writing_first_creates_an_unreviewed_card_without_a_notice(world) -> None:
+    pipeline, _, notifier, database = world
+
+    await pipeline.process_incoming(
+        message(
+            chat_id=555,
+            filter_result=HardFilterResult.OWNER_MESSAGE,
+            contact_name="Вова Бублик",
+            contact_username="@Vova",
+        )
+    )
+
+    async with database.session() as session:
+        card = await session.scalar(
+            select(models.ContactActivity).where(models.ContactActivity.contact_id == 555)
+        )
+    assert card is not None
+    assert (card.contact_name, card.contact_username) == ("Вова Бублик", "Vova")
+    assert card.configured_at is None and card.last_incoming_at is None
+    assert notifier.alerts == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "result",
     [HardFilterResult.BOT_SENDER, HardFilterResult.SERVICE_SENDER, HardFilterResult.NON_PRIVATE],
@@ -266,10 +335,10 @@ async def test_contact_template_override_wins_over_classification(world) -> None
 async def test_filtered_senders_never_reach_the_gate(world, result: HardFilterResult) -> None:
     pipeline, _, _, database = world
 
-    await pipeline.process_incoming(message(filter_result=result))
+    await pipeline.process_incoming(message(chat_id=555, filter_result=result))
 
     assert await actions(database) == []
-    assert await count(database, models.ContactActivity) == 0
+    assert await count(database, models.ContactActivity) == 2  # only the seeded contacts
 
 
 @pytest.mark.asyncio

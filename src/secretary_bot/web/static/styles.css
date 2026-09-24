@@ -150,6 +150,8 @@ input[type="checkbox"], input[type="radio"] { width: auto; }
 .contact-item:hover, .contact-item.active { border-color: rgba(255, 150, 63, .5); background: var(--surface-2); }
 .contact-item strong, .contact-item small { display: block; }
 .contact-item small { margin-top: 5px; color: var(--muted); }
+.contact-item small.neutral { color: var(--warning); }
+.contact-item.needs-setup:not(.active) { border-color: rgba(255, 189, 102, .45); }
 .contact-editor { min-height: 390px; padding: 20px; border: 1px solid var(--border); border-radius: 14px; background: var(--card); }
 .contact-editor.empty { display: grid; place-items: center; color: var(--muted); text-align: center; }
 fieldset { display: grid; grid-template-columns: repeat(3, auto); justify-content: start; gap: 16px; margin: 20px 0 8px; padding: 16px; border: 1px solid var(--border); border-radius: 12px; }

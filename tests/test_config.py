@@ -26,6 +26,31 @@ def test_defaults_keep_the_bot_offline_and_silent(monkeypatch: pytest.MonkeyPatc
     assert settings.allowed_chat_ids == frozenset()
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"), [(None, True), ("", True), ("true", True), ("FALSE", False), ("0", False)]
+)
+def test_contact_setup_rule_is_on_unless_switched_off(
+    monkeypatch: pytest.MonkeyPatch, raw: str | None, expected: bool
+) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "123456:TEST_TOKEN")
+    monkeypatch.setenv("WEBHOOK_SECRET", "valid_secret")
+    if raw is None:
+        monkeypatch.delenv("REQUIRE_CONTACT_SETUP", raising=False)
+    else:
+        monkeypatch.setenv("REQUIRE_CONTACT_SETUP", raw)
+
+    assert Settings.from_env().require_contact_setup is expected
+
+
+def test_contact_setup_rule_rejects_an_ambiguous_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "123456:TEST_TOKEN")
+    monkeypatch.setenv("WEBHOOK_SECRET", "valid_secret")
+    monkeypatch.setenv("REQUIRE_CONTACT_SETUP", "maybe")
+
+    with pytest.raises(ConfigurationError, match="REQUIRE_CONTACT_SETUP"):
+        Settings.from_env()
+
+
 def test_openai_provider_requires_its_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BOT_TOKEN", "123456:TEST_TOKEN")
     monkeypatch.setenv("WEBHOOK_SECRET", "valid_secret")

@@ -24,7 +24,7 @@ async function screen(t, {status=200, theme='dark', handler, data=structuredClon
   return w;
 }
 function response(data,status=200){return {status,ok:status===200,json:async()=>data};}
-function contact(id){return {contact_id:id,contact_name:'Контакт '+id,exclusion:'none',windows:[],auto_reply_count:0,preview_count:0,paid_escalation_count:0,off_hours_request_count:0};}
+function contact(id){return {contact_id:id,contact_name:'Контакт '+id,configured:true,exclusion:'none',windows:[],auto_reply_count:0,preview_count:0,paid_escalation_count:0,off_hours_request_count:0};}
 
 test('Telegram SDK cannot block rendering and launch data still authenticates',async t=>{
   const html=readFileSync(staticRoot+'index.html','utf8');
@@ -92,6 +92,23 @@ test('switching contacts preserves edits when discard is declined',async t=>{
   assert.equal(w.document.querySelector('#contact-title').textContent,'Контакт 100');
   assert.equal(field.value,'2026-12-01T12:30');
 });
+test('a new contact is marked until its rules are saved',async t=>{
+  const w=await screen(t,{handler:(path,options)=>{
+    if(path==='/api/v1/contacts/101')return response({...contact(101),...JSON.parse(options.body)});
+    if(path.startsWith('/api/v1/contacts'))return response({items:[{...contact(101),configured:false},contact(100)],has_more:false});
+  }});
+  w.document.querySelector('[data-view=contacts]').click(); await tick();
+  const item=w.document.querySelector('[data-contact-id="101"]');
+  assert.ok(item.classList.contains('needs-setup'));
+  assert.match(item.textContent,/Не налаштовано/);
+  assert.ok(!w.document.querySelector('[data-contact-id="100"]').classList.contains('needs-setup'));
+  item.click();
+  assert.ok(!w.document.querySelector('#contact-setup-note').classList.contains('hidden'));
+  w.document.querySelector('#contact-form').requestSubmit(); await tick(); await tick();
+  assert.ok(w.document.querySelector('#contact-setup-note').classList.contains('hidden'));
+  assert.ok(!w.document.querySelector('[data-contact-id="101"]').classList.contains('needs-setup'));
+});
+
 test('saving a contact clears dirty state without a discard confirmation',async t=>{
   let saved;
   const w=await screen(t,{handler:(path,options)=>{

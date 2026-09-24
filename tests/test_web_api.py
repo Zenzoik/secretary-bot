@@ -12,7 +12,7 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from pypdf import PdfReader
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from secretary_bot import models
 from secretary_bot.actions import LogAction
@@ -29,6 +29,7 @@ from secretary_bot.storage import (
     load_owner_connection,
     log_decision,
     record_incoming,
+    record_owner_reply,
     upsert_connection,
 )
 from secretary_bot.web_api import build_web_router
@@ -54,7 +55,11 @@ def headers(user_id: int = 42) -> dict[str, str]:
 
 
 def web_app(
-    database: Database, *, message_encryption_key: str | None = None, bot: object | None = None
+    database: Database,
+    *,
+    message_encryption_key: str | None = None,
+    bot: object | None = None,
+    require_contact_setup: bool = True,
 ) -> FastAPI:
     app = FastAPI()
     settings = Settings(
@@ -64,6 +69,7 @@ def web_app(
         bot_username="secretary_test_bot",
         public_base_url="https://testserver",
         message_encryption_key=message_encryption_key,
+        require_contact_setup=require_contact_setup,
     )
     app.include_router(build_web_router(database=database, settings=settings, bot=bot))
     return app
@@ -591,6 +597,55 @@ async def test_contacts_support_exclusions_personal_windows_and_owner_isolation(
         assert evaluate_gate(connection.policy, state, now=NOW).decision is (
             GateDecision.SKIPPED_EXCLUDED
         )
+
+
+@pytest.mark.asyncio
+async def test_saving_a_new_contact_lets_the_bot_answer_it(database: Database) -> None:
+    connection_id = await seed_owner(database)
+    async with database.session() as session, session.begin():
+        await record_incoming(session, connection_id, 100, at=NOW, contact_name="Reviewed")
+        await session.execute(update(models.ContactActivity).values(configured_at=NOW))
+        await record_incoming(
+            session, connection_id, 101, at=NOW - timedelta(days=1), contact_name="Newcomer"
+        )
+        await record_owner_reply(session, connection_id, 102, at=NOW, contact_name="Silent")
+
+    transport = ASGITransport(app=web_app(database))
+    async with AsyncClient(transport=transport, base_url="https://testserver") as client:
+        before = (await client.get("/api/v1/contacts", headers=headers())).json()["items"]
+        saved = await client.put(
+            "/api/v1/contacts/101", headers=headers(), json={"exclusion": "none", "windows": []}
+        )
+        after = (await client.get("/api/v1/contacts", headers=headers())).json()["items"]
+
+    # Contacts waiting for setup come first; one that never wrote sorts after one that did.
+    assert [(item["contact_id"], item["configured"]) for item in before] == [
+        (101, False),
+        (102, False),
+        (100, True),
+    ]
+    assert saved.status_code == 200 and saved.json()["configured"] is True
+    assert [item["contact_id"] for item in after] == [102, 100, 101]
+    async with database.session() as session:
+        state = await load_contact_state(session, connection_id, 101)
+    assert state.configured
+
+
+@pytest.mark.asyncio
+async def test_disabled_setup_rule_shows_every_contact_as_ready(database: Database) -> None:
+    connection_id = await seed_owner(database)
+    async with database.session() as session, session.begin():
+        await record_incoming(session, connection_id, 101, at=NOW, contact_name="Newcomer")
+
+    transport = ASGITransport(app=web_app(database, require_contact_setup=False))
+    async with AsyncClient(transport=transport, base_url="https://testserver") as client:
+        contacts = await client.get("/api/v1/contacts", headers=headers())
+        preview = await client.post(
+            "/api/v1/preview", headers=headers(), json={"text": "привіт", "contact_id": 101}
+        )
+
+    assert contacts.json()["items"][0]["configured"] is True
+    assert preview.json()["decision"] != "skipped_unconfigured"
 
 
 @pytest.mark.asyncio

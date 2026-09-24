@@ -18,8 +18,9 @@ from secretary_bot.classifier import Category, ClassifierSettings, LanguageModel
 from secretary_bot.delayed import MAX_DELAY_SECONDS, DelayedReplyQueue, ReplyTask, reply_delay
 from secretary_bot.delivery import send_once
 from secretary_bot.escalation import escalation_offer_keyboard
-from secretary_bot.gate import GateDecision, evaluate_gate
+from secretary_bot.gate import ContactState, GateDecision, evaluate_gate
 from secretary_bot.hard_filter import HardFilterResult
+from secretary_bot.identities import contact_label
 from secretary_bot.notifications import OwnerNotifier, Preview
 from secretary_bot.retention import MESSAGE_RETENTION, MessageCipher, MessageContext
 from secretary_bot.sender import BusinessReplySender, SendOutcome
@@ -27,6 +28,7 @@ from secretary_bot.storage import (
     ConnectionRecord,
     Database,
     capture_message,
+    claim_setup_alert,
     claim_window,
     deactivate_connection,
     enqueue_morning,
@@ -44,7 +46,7 @@ from secretary_bot.storage import (
     set_request_reply_message,
 )
 from secretary_bot.templates import TemplateCode, render, template_for
-from secretary_bot.texts import CONNECTION_LOST_ALERT, as_bot_reply
+from secretary_bot.texts import CONNECTION_LOST_ALERT, as_bot_reply, new_contact_alert
 
 logger = logging.getLogger(__name__)
 
@@ -83,12 +85,14 @@ class Pipeline:
     classifier_defaults: ClassifierSettings = field(default_factory=ClassifierSettings)
     rng: random.Random | None = None
     message_cipher: MessageCipher | None = None
+    require_contact_setup: bool = True
 
     async def process_incoming(self, incoming: IncomingMessage) -> None:
         """Steps 1–4 of §4: filter, gate, classify, then wait out the delay."""
         job_key = (
             f"reply:{incoming.business_connection_id}:{incoming.contact_id}:{incoming.message_id}"
         )
+        new_contact: ConnectionRecord | None = None
         async with self.database.session() as session, session.begin():
             existing_job = await session.get(models.ReplyJob, job_key)
             if existing_job is not None:
@@ -110,9 +114,14 @@ class Pipeline:
             if incoming.filter_result is HardFilterResult.OWNER_MESSAGE:
                 # FR-9: the owner answered this chat himself.
                 await record_owner_reply(
-                    session, connection.id, incoming.contact_id, at=incoming.received_at
+                    session,
+                    connection.id,
+                    incoming.contact_id,
+                    at=incoming.received_at,
+                    contact_name=incoming.contact_name,
+                    contact_username=incoming.contact_username,
                 )
-                contact = await load_contact_state(session, connection.id, incoming.contact_id)
+                contact = await self._contact_state(session, connection.id, incoming.contact_id)
                 if contact.exclusion is None or not contact.exclusion.covers(incoming.received_at):
                     await self._capture_incoming(session, connection, incoming, direction="out")
                 return
@@ -141,7 +150,7 @@ class Pipeline:
                 contact_name=incoming.contact_name,
                 contact_username=incoming.contact_username,
             )
-            contact = await load_contact_state(session, connection.id, incoming.contact_id)
+            contact = await self._contact_state(session, connection.id, incoming.contact_id)
             gate = evaluate_gate(connection.policy, contact, now=incoming.received_at)
             if gate.decision not in {
                 GateDecision.SKIPPED_INACTIVE,
@@ -161,11 +170,24 @@ class Pipeline:
                         occurred_at=incoming.received_at,
                     )
                 await self._log(session, connection, incoming, LogAction(gate.decision.value))
-                return
-
-            settings = await load_classifier_settings(
-                session, connection.id, defaults=self.classifier_defaults
+                if gate.decision is not GateDecision.SKIPPED_UNCONFIGURED or not (
+                    await claim_setup_alert(
+                        session, connection.id, incoming.contact_id, at=incoming.received_at
+                    )
+                ):
+                    return
+                new_contact = connection
+            else:
+                settings = await load_classifier_settings(
+                    session, connection.id, defaults=self.classifier_defaults
+                )
+        if new_contact is not None:
+            # Sent after the commit: a Telegram call never holds a transaction open.
+            await self._alert(
+                new_contact,
+                new_contact_alert(contact_label(incoming.contact_name, incoming.contact_username)),
             )
+            return
         # Slow model I/O must not hold a database transaction or a pooled connection.
         classification = await classify(incoming.text, model=self.model, settings=settings)
         async with self.database.session() as session, session.begin():
@@ -178,7 +200,7 @@ class Pipeline:
                 return
             connection = await load_connection(session, incoming.business_connection_id)
             assert connection is not None
-            contact = await load_contact_state(session, connection.id, incoming.contact_id)
+            contact = await self._contact_state(session, connection.id, incoming.contact_id)
             gate = evaluate_gate(connection.policy, contact, now=incoming.received_at)
             if not gate.is_allowed:
                 await self._log(session, connection, incoming, LogAction(gate.decision.value))
@@ -284,7 +306,7 @@ class Pipeline:
             # the meantime wins, while a reply due seconds after the window closes
             # still goes out. The window limit was reserved by this very task, and
             # pause/kill switch were checked above against the current moment.
-            contact = await load_contact_state(session, connection.id, task.contact_id)
+            contact = await self._contact_state(session, connection.id, task.contact_id)
             gate = evaluate_gate(
                 replace(connection.policy, max_auto_replies_per_window=None, muted_until=None),
                 contact,
@@ -448,6 +470,13 @@ class Pipeline:
             contact_name=task.contact_name,
             occurred_at=task.incoming_moment,
             summary=direction.label if direction else None,
+        )
+
+    async def _contact_state(
+        self, session: AsyncSession, connection_id: int, contact_id: int
+    ) -> ContactState:
+        return await load_contact_state(
+            session, connection_id, contact_id, require_setup=self.require_contact_setup
         )
 
     async def _alert(self, connection: ConnectionRecord, text: str) -> None:

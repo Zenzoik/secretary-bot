@@ -13,6 +13,7 @@ class GateDecision(StrEnum):
     SKIPPED_INACTIVE = "skipped_inactive"
     SKIPPED_KILL_SWITCH = "skipped_kill_switch"
     SKIPPED_EXCLUDED = "skipped_excluded"
+    SKIPPED_UNCONFIGURED = "skipped_unconfigured"
     SKIPPED_SCHEDULE = "skipped_schedule"
     SKIPPED_WINDOW_LIMIT = "skipped_window_limit"
 
@@ -75,6 +76,8 @@ class ContactState:
     last_auto_reply_window_key: str | None = None
     auto_reply_count_in_window: int = 0
     windows: tuple[QuietWindow, ...] = ()
+    # A contact the owner has not reviewed yet gets no automatic reply.
+    configured: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +103,8 @@ def evaluate_gate(policy: ConnectionPolicy, contact: ContactState, *, now: datet
         return GateResult(GateDecision.SKIPPED_KILL_SWITCH)
     if contact.exclusion is not None and contact.exclusion.covers(now):
         return GateResult(GateDecision.SKIPPED_EXCLUDED)
+    if not contact.configured:
+        return GateResult(GateDecision.SKIPPED_UNCONFIGURED)
 
     windows = contact.windows or policy.windows
     occurrence = current_window(windows, now.astimezone(ZoneInfo(policy.timezone)))
