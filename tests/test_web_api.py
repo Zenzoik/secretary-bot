@@ -32,6 +32,7 @@ from secretary_bot.storage import (
     record_owner_reply,
     upsert_connection,
 )
+from secretary_bot.templates import DEFAULT_TEMPLATES, TemplateCode
 from secretary_bot.web_api import build_web_router
 
 TOKEN = "123456:TEST_TOKEN"
@@ -830,6 +831,98 @@ async def test_custom_direction_requires_reply_template(database):
     assert save.status_code == 422
     assert expand.status_code == 422
     assert "відповідь клієнту" in save.text
+
+
+@pytest.mark.asyncio
+async def test_built_in_type_reply_is_the_shared_template(database):
+    from secretary_bot.storage import load_templates
+
+    owner = await seed_owner(database)
+    async with database.session() as session, session.begin():
+        # A per-type text saved by the old editor is what the bot sends today.
+        session.add(
+            models.ClassificationDirection(
+                connection_id=owner,
+                code="money",
+                label="Гроші",
+                description="Оплата",
+                reply_template="Старий текст про оплату",
+                priority="high",
+            )
+        )
+    async with AsyncClient(
+        transport=ASGITransport(app=web_app(database)), base_url="https://testserver"
+    ) as client:
+        payload = (await client.get("/api/v1/bootstrap", headers=headers())).json()["classifier"]
+        replies = {d["code"]: d["reply_template"] for d in payload["directions"]}
+        assert replies == {
+            "general": DEFAULT_TEMPLATES[TemplateCode.OFF_HOURS_DEFAULT],
+            "money": "Старий текст про оплату",
+        }
+
+        for direction in payload["directions"]:
+            direction.pop("priority")
+            if direction["code"] == "general":
+                direction["reply_template"] = "  Відповім зранку  "
+        saved = await client.put("/api/v1/classifier", headers=headers(), json=payload)
+        assert saved.status_code == 200
+        assert {d["code"]: d["reply_template"] for d in saved.json()["directions"]} == {
+            "general": "Відповім зранку",
+            "money": "Старий текст про оплату",
+        }
+        async with database.session() as session:
+            templates = await load_templates(session, owner)
+            money = await session.scalar(
+                select(models.ClassificationDirection).where(
+                    models.ClassificationDirection.code == "money"
+                )
+            )
+        # One source per reply: the templates the contact menu in the bot also uses.
+        assert templates["off_hours_default"] == "Відповім зранку"
+        assert templates["money_priority"] == "Старий текст про оплату"
+        assert "direction_general" not in templates and "direction_money" not in templates
+        assert money is not None and money.reply_template == "" and money.priority == "high"
+
+        payload["directions"][0]["reply_template"] = ""
+        assert (
+            await client.put("/api/v1/classifier", headers=headers(), json=payload)
+        ).status_code == 200
+        async with database.session() as session:
+            assert (await load_templates(session, owner))["off_hours_default"] == "Відповім зранку"
+
+        # Priority is hidden in the panel, so a save without it keeps what is stored.
+        async with database.session() as session, session.begin():
+            money = await session.scalar(
+                select(models.ClassificationDirection).where(
+                    models.ClassificationDirection.code == "money"
+                )
+            )
+            assert money is not None
+            money.priority = "normal"
+        payload["directions"].append(
+            {
+                "code": "support",
+                "label": "Підтримка",
+                "description": "Помилки",
+                "reply_template": "Перевірю",
+                "keywords": [],
+            }
+        )
+        assert (
+            await client.put("/api/v1/classifier", headers=headers(), json=payload)
+        ).status_code == 200
+        async with database.session() as session:
+            priorities = dict(
+                (
+                    await session.execute(
+                        select(
+                            models.ClassificationDirection.code,
+                            models.ClassificationDirection.priority,
+                        )
+                    )
+                ).all()
+            )
+        assert priorities == {"general": "normal", "money": "normal", "support": "normal"}
 
 
 @pytest.mark.asyncio

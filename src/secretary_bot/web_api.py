@@ -140,6 +140,14 @@ class SchedulePayload(BaseModel):
         return value
 
 
+# The built-in types answer with these shared templates, which the contact menu
+# in the bot chat also offers, so each reply text is stored in one place only.
+DIRECTION_TEMPLATES: dict[str, TemplateCode] = {
+    "general": TemplateCode.OFF_HOURS_DEFAULT,
+    "money": TemplateCode.MONEY_PRIORITY,
+}
+
+
 class TemplatesPayload(BaseModel):
     off_hours_default: Annotated[str, Field(max_length=1000)]
     money_priority: Annotated[str, Field(max_length=1000)]
@@ -188,7 +196,7 @@ class DirectionPayload(BaseModel):
 
     @model_validator(mode="after")
     def require_custom_reply_template(self) -> DirectionPayload:
-        if self.code not in {"general", "money"} and not self.reply_template:
+        if self.code not in DIRECTION_TEMPLATES and not self.reply_template:
             raise ValueError("Для нового типу вкажіть відповідь клієнту")
         return self
 
@@ -688,22 +696,9 @@ def build_web_router(
         async with database.session() as session, session.begin():
             principal = await api.authorize(session, request)
             for code in TemplateCode:
-                row = await session.scalar(
-                    select(models.Template).where(
-                        models.Template.connection_id == principal.connection.id,
-                        models.Template.code == code.value,
-                    )
+                await _save_template(
+                    session, principal.connection.id, code, getattr(payload, code.value)
                 )
-                if row is None:
-                    row = models.Template(
-                        connection_id=principal.connection.id,
-                        code=code.value,
-                        text=getattr(payload, code.value),
-                    )
-                    session.add(row)
-                else:
-                    row.text = getattr(payload, code.value)
-                    row.is_active = True
             await session.flush()
             return await _templates(session, principal.connection.id)
 
@@ -767,10 +762,19 @@ def build_web_router(
                         description=direction.description,
                     )
                     session.add(row)
-                row.reply_template = direction.reply_template.strip()
-                row.priority = direction.priority or (
-                    "high" if direction.code == "money" else "normal"
-                )
+                reply = direction.reply_template.strip()
+                template_code = DIRECTION_TEMPLATES.get(direction.code)
+                if template_code is not None:
+                    # Empty keeps the current template: older clients sent "" for "unchanged".
+                    if reply:
+                        await _save_template(session, principal.connection.id, template_code, reply)
+                    reply = ""
+                row.reply_template = reply
+                # The panel no longer shows priority: keep what is stored, default new types.
+                if direction.priority is not None:
+                    row.priority = direction.priority
+                elif row.priority is None:
+                    row.priority = "high" if direction.code == "money" else "normal"
                 row.label = direction.label.strip()
                 row.description = direction.description.strip()
                 row.keywords_json = direction.keywords
@@ -1153,6 +1157,22 @@ async def _schedule(session: AsyncSession, connection: models.Connection) -> dic
     }
 
 
+async def _save_template(
+    session: AsyncSession, connection_id: int, code: TemplateCode, text: str
+) -> None:
+    row = await session.scalar(
+        select(models.Template).where(
+            models.Template.connection_id == connection_id,
+            models.Template.code == code.value,
+        )
+    )
+    if row is None:
+        session.add(models.Template(connection_id=connection_id, code=code.value, text=text))
+    else:
+        row.text = text
+        row.is_active = True
+
+
 async def _templates(session: AsyncSession, connection_id: int) -> dict[str, str]:
     rows = await session.scalars(
         select(models.Template).where(
@@ -1173,14 +1193,19 @@ async def _classifier(
         .order_by(models.ClassificationDirection.code)
     )
     stored = {row.code: row for row in rows}
+    templates = await _templates(session, connection_id)
     directions = []
     for code in dict.fromkeys(("general", "money", *stored)):
         row = stored.get(code)
         fallback = DEFAULT_DIRECTIONS.get(code, DEFAULT_DIRECTIONS["general"])
+        reply = "" if row is None else row.reply_template
+        if code in DIRECTION_TEMPLATES and not reply.strip():
+            # What the bot actually sends: a legacy per-type text wins over the template.
+            reply = templates[DIRECTION_TEMPLATES[code].value]
         directions.append(
             {
                 "code": code,
-                "reply_template": "" if row is None else row.reply_template,
+                "reply_template": reply,
                 "priority": ("high" if code == "money" else "normal")
                 if row is None
                 else row.priority,

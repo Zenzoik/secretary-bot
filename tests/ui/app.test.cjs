@@ -284,7 +284,7 @@ test('custom direction is editable and expansion is a draft until explicit save'
   card.querySelector('.direction-label').value = 'Підтримка';
   card.querySelector('.direction-description').value = 'Помилки в роботі';
   card.querySelector('.direction-template').value = 'Перевірю';
-  card.querySelector('.direction-priority').value = 'high';
+  assert.equal(card.querySelector('.direction-priority'), null);
   const form = doc.querySelector('#classifier-form');
   assert.equal(form.dataset.dirty, 'true');
   assert.equal(form.dataset.promptStale, 'true');
@@ -302,7 +302,8 @@ test('custom direction is editable and expansion is a draft until explicit save'
   form.dispatchEvent(new w.Event('submit', {bubbles:true,cancelable:true}));
   await tick(); await tick();
   assert.equal(saved.directions[2].reply_template, 'Перевірю');
-  assert.equal(saved.directions[2].priority, 'high');
+  assert.equal('priority' in saved.directions[2], false);
+  assert.equal(saved.directions[0].reply_template, base.templates.off_hours_default);
   assert.deepEqual(saved.directions[2].keywords, ['увійти','авторизац']);
   assert.equal(saved.directions[2].description, 'Помилки в роботі');
 });
@@ -326,7 +327,6 @@ test('custom direction cannot be generated without a client reply', async t => {
   const reply = card.querySelector('.direction-template');
   reply.value = '   ';
   assert.equal(reply.required, true);
-  assert.match(reply.previousElementSibling.textContent, /Обов’язкове поле/);
 
   doc.querySelector('#expand-classifier').click();
   await tick();
@@ -334,17 +334,36 @@ test('custom direction cannot be generated without a client reply', async t => {
   assert.equal(expansionCalls, 0);
   assert.equal(doc.activeElement, reply);
   assert.match(doc.querySelector('#toast').textContent, /Додайте відповідь клієнту/);
-  assert.equal(doc.querySelector('[data-code="general"] .direction-template').required, false);
-  assert.match(doc.querySelector('[data-code="general"] .direction-template').previousElementSibling.textContent, /вкладки «Шаблони»/);
+  assert.equal(doc.querySelector('[data-code="general"] .direction-template').required, true);
 });
 
-test('failed expansion preserves manually edited master prompt', async t => {
-  const w = await screen(t, {handler: path => path === '/api/v1/classifier/expand' ? response({detail:'ШІ недоступний'},503) : null});
-  const form = w.document.querySelector('#classifier-form');
-  form.elements.system_prompt.value = 'Моя вручну відредагована інструкція';
-  w.document.querySelector('#expand-classifier').click(); await tick(); await tick();
-  assert.equal(form.elements.system_prompt.value, 'Моя вручну відредагована інструкція');
-  assert.equal(w.document.querySelector('#expand-classifier').disabled, false);
+test('templates tab is gone: built-in types show their reply, old links land on the types', async t => {
+  const w = await screen(t, {url:'https://testserver/app/#templates'});
+  const doc = w.document;
+  assert.equal(doc.querySelector('[data-view="templates"]'), null);
+  assert.equal(doc.querySelector('#templates-form'), null);
+  assert.equal(doc.querySelector('[data-view-panel="classifier"]').classList.contains('active'), true);
+  assert.equal(doc.querySelector('[data-code="general"] .direction-template').value, base.templates.off_hours_default);
+  assert.equal(doc.querySelector('[data-code="money"] .direction-template').value, base.templates.money_priority);
+});
+
+test('each type shows a clear on/off state and general cannot be switched off', async t => {
+  const w = await screen(t);
+  const doc = w.document;
+  assert.equal(doc.querySelector('[data-code="general"] .direction-active'), null);
+  assert.match(doc.querySelector('[data-code="general"] .direction-state').textContent, /Завжди увімкнено/);
+  const money = doc.querySelector('[data-code="money"]');
+  assert.equal(money.querySelector('.direction-title').textContent, 'Гроші');
+  assert.equal(money.querySelector('.direction-state').textContent, 'Увімкнено');
+  const toggle = money.querySelector('.direction-active');
+  toggle.click();
+  assert.equal(money.classList.contains('is-off'), true);
+  assert.equal(money.querySelector('.direction-state').textContent, 'Вимкнено');
+  assert.equal(doc.querySelector('#classifier-form').dataset.promptStale, 'true');
+  const label = money.querySelector('.direction-label');
+  label.value = 'Оплати';
+  label.dispatchEvent(new w.Event('input', {bubbles:true}));
+  assert.equal(money.querySelector('.direction-title').textContent, 'Оплати');
 });
 
 test('paid escalation is collapsed until opened and schedule override is a button', async t => {

@@ -9,10 +9,10 @@
     <meta property="og:description" content="Налаштування без зайвих кроків">
     <meta property="og:image" content="{{BASE_URL}}/assets/og.png">
     <title>Personal Secretary — налаштування</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260925-escalation1">
+    <link rel="stylesheet" href="/assets/styles.css?v=20260925-reply-types1">
     <script id="telegram-web-app-sdk" src="https://telegram.org/js/telegram-web-app.js?59" async></script>
     <script src="/assets/ui-utils.js?v=20260907-sdk-fallback1" defer></script>
-    <script src="/assets/app.js?v=20260925-escalation1" defer></script>
+    <script src="/assets/app.js?v=20260925-reply-types1" defer></script>
   </head>
   <body>
     <div class="app-shell" id="app" aria-busy="true">
@@ -25,12 +25,11 @@
           <button data-view="overview"><span>01</span> Огляд</button>
           <button data-view="schedule"><span>02</span> Розклад</button>
           <button data-view="contacts"><span>03</span> Контакти</button>
-          <button data-view="templates"><span>04</span> Шаблони</button>
-          <button data-view="classifier"><span>05</span> Типи звернень</button>
-          <button data-view="summary"><span>06</span> Підсумки</button>
-          <button data-view="analytics"><span>07</span> Аналітика</button>
-          <button data-view="logs"><span>08</span> Історія дій</button>
-          <button data-view="users" class="hidden" id="users-nav"><span>09</span> Користувачі</button>
+          <button data-view="classifier"><span>04</span> Типи звернень</button>
+          <button data-view="summary"><span>05</span> Підсумки</button>
+          <button data-view="analytics"><span>06</span> Аналітика</button>
+          <button data-view="logs"><span>07</span> Історія дій</button>
+          <button data-view="users" class="hidden" id="users-nav"><span>08</span> Користувачі</button>
         </nav>
         <div class="sidebar-footer">
           <button class="text-button browser-link-action">Відкрити у браузері</button>
@@ -189,24 +188,13 @@
             </form>
           </section>
 
-          <section class="view" data-view-panel="templates">
-            <form class="panel" id="templates-form">
-              <div class="panel-heading"><div><p class="eyebrow">Тексти</p><h2>Шаблони відповідей</h2></div><span class="section-note">До 1000 символів</span></div>
-              <div class="template-grid">
-                <label><span>Звичайна відповідь</span><small>Для повідомлень не про оплату</small><textarea name="off_hours_default" rows="6" maxlength="1000" required></textarea></label>
-                <label><span>Питання про оплату</span><small>Для рахунків, оплат і заборгованостей</small><textarea name="money_priority" rows="6" maxlength="1000" required></textarea></label>
-              </div>
-              <div class="form-actions"><button class="primary" type="submit">Зберегти шаблони</button></div>
-            </form>
-          </section>
-
           <section class="view" data-view-panel="classifier">
             <form class="panel" id="classifier-form">
-              <div class="panel-heading"><div><p class="eyebrow">Розпізнавання повідомлень</p><h2>Типи звернень</h2></div></div>
+              <div class="panel-heading"><div><p class="eyebrow">Розпізнавання й відповіді</p><h2>Типи звернень</h2></div></div>
               <section class="classifier-step" aria-labelledby="classifier-step-types">
                 <div class="classifier-step-heading">
                   <span class="step-number">1</span>
-                  <div><strong id="classifier-step-types">Опишіть типи звернень</strong><small>Для нового типу заповніть усі три поля: назву, короткий опис і відповідь клієнту.</small></div>
+                  <div><strong id="classifier-step-types">Опишіть типи звернень</strong><small>Кожен тип — це опис повідомлень і відповідь, яку отримає клієнт. Вимкнений тип не розпізнається: такі повідомлення отримають відповідь звичайного звернення.</small></div>
                 </div>
                 <div class="direction-list" id="direction-list"></div>
                 <div class="classifier-toolbar"><button class="secondary" type="button" id="add-direction">+ Додати тип звернення</button></div>
