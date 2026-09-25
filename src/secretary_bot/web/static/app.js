@@ -8,7 +8,7 @@
   const launchInitData = new URLSearchParams(location.hash.slice(1)).get("tgWebAppData") || "";
   let tg = window.Telegram?.WebApp;
   let configuredTelegram = null;
-  const state = { bootstrap: null, contacts: [], logContacts: [], selectedContact: null, analytics: null, activeView: "overview", returnTo: "more" };
+  const state = { bootstrap: null, contacts: [], logContacts: [], selectedContact: null, analytics: null, activeView: "overview", trail: [] };
   const titles = {
     overview: "Головна", contacts: "Контакти", classifier: "Відповіді", more: "Ще",
     schedule: "Розклад", delivery: "Доставка", summary: "Щоденний підсумок", escalation: "Платні звернення",
@@ -191,13 +191,15 @@
     field.remove();
   }
 
-  function navigate(view) {
+  // How a view was reached: a tab starts over, a link inside a page remembers
+  // where it came from so that Back returns there.
+  function navigate(view, { via } = {}) {
     if (!titles[view]) return;
-    // A deep link straight to a page has no tab behind it; "Ще" is its home.
-    if (tabs.includes(state.activeView) && state.navigated) state.returnTo = state.activeView;
-    state.navigated = true;
+    if (via === "tab") state.trail = [];
+    if (via === "link" && view !== state.activeView) state.trail.push(state.activeView);
     state.activeView = view;
-    const tab = tabs.includes(view) ? view : state.returnTo;
+    // A page belongs to the tab it was opened from; a deep link to one belongs to "Ще".
+    const tab = tabs.includes(view) ? view : [...state.trail].reverse().find((item) => tabs.includes(item)) || "more";
     $$("#navigation [data-view]").forEach((button) => button.classList.toggle("active", button.dataset.view === tab));
     $$("[data-view-panel]").forEach((panel) => panel.classList.toggle("active", panel.dataset.viewPanel === view));
     $("#page-title").textContent = titles[view];
@@ -220,7 +222,7 @@
   }
 
   function canGoBack() {
-    return !tabs.includes(state.activeView) || contactOpenAlone();
+    return contactOpenAlone() || state.trail.length > 0 || !tabs.includes(state.activeView);
   }
 
   function renderBackButton() {
@@ -232,7 +234,8 @@
 
   function goBack() {
     if (contactOpenAlone()) { closeContact(); return; }
-    if (!tabs.includes(state.activeView)) navigate(state.returnTo);
+    if (state.trail.length) navigate(state.trail.pop());
+    else if (!tabs.includes(state.activeView)) navigate("more");
   }
 
   async function loadUsers() {
@@ -316,7 +319,7 @@
     const rights = state.bootstrap.connection.rights || {};
     const items = [];
     if (!rights.can_reply) items.push('<div class="list-row warn"><span>Немає права відповідати</span><small>Chat Automation</small></div>');
-    if (state.newContacts) items.push(`<button class="list-row warn" type="button" data-view="contacts"><span>Нові контакти</span><small>${state.newContacts}${state.newContactsMore ? "+" : ""}</small></button>`);
+    if (state.newContacts) items.push(`<button class="list-row warn" type="button" data-view="contacts" data-contact-list><span>Нові контакти</span><small>${state.newContacts}${state.newContactsMore ? "+" : ""}</small></button>`);
     if (current.failed_notifications > 0) items.push(`<div class="list-row warn"><span>Сповіщення не доставлено</span><small>${current.failed_notifications}</small><button class="chip-button" id="retry-notifications" type="button">Повторити</button></div>`);
     if (current.summary_status === "error") items.push('<button class="list-row warn" type="button" data-view="summary"><span>Підсумок не надіслано</span></button>');
     if (current.uncertain_deliveries > 0) items.push(`<div class="list-row warn"><span>Перевірте надсилання в чатах</span><small>${current.uncertain_deliveries}</small></div>`);
@@ -879,7 +882,11 @@
     // Rows that open a view can be rendered later (the attention list), so listen once.
     document.addEventListener("click", (event) => {
       const target = event.target.closest("[data-view]");
-      if (target && !target.disabled) navigate(target.dataset.view);
+      if (!target || target.disabled) return;
+      // "Нові контакти" promises the list: a card left open earlier is closed,
+      // unless it has unsaved edits, which are kept.
+      if (target.hasAttribute("data-contact-list") && state.selectedContact && $("#contact-form").dataset.dirty !== "true") closeContact();
+      navigate(target.dataset.view, { via: target.closest("#navigation") ? "tab" : "link" });
     });
     $("#back-button").addEventListener("click", goBack);
     window.matchMedia?.("(min-width: 900px)")?.addEventListener?.("change", () => { if (state.bootstrap) renderBackButton(); });

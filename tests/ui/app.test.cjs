@@ -655,3 +655,31 @@ test('connecting a channel by link does not leave the summary form unsaved',asyn
   field.value='https://t.me/c/1/2'; field.dispatchEvent(new w.Event('input',{bubbles:true}));
   assert.notEqual(form.dataset.dirty,'true');
 });
+
+test('a link from the home screen to a tab offers Back to the home screen',async t=>{
+  const w=await screen(t,{handler:path=>path.startsWith('/api/v1/contacts')?response({items:[{...contact(1),configured:false}],has_more:false}):null});
+  const d=w.document; await tick();
+  d.querySelector('#attention [data-view=contacts]').click(); await tick();
+  assert.equal(d.querySelector('[data-view-panel=contacts]').classList.contains('active'),true);
+  assert.equal(d.querySelector('#back-button').classList.contains('hidden'),false);
+  d.querySelector('[data-contact-id="1"]').click();
+  d.querySelector('#back-button').click();
+  assert.equal(d.querySelector('[data-view-panel=contacts]').classList.contains('active'),true,'first Back closes the contact');
+  d.querySelector('#back-button').click();
+  assert.equal(d.querySelector('[data-view-panel=overview]').classList.contains('active'),true);
+  assert.equal(d.querySelector('#back-button').classList.contains('hidden'),true);
+  d.querySelector('#attention [data-view=contacts]').click(); await tick();
+  d.querySelector('#navigation [data-view=contacts]').click(); await tick();
+  assert.equal(d.querySelector('#back-button').classList.contains('hidden'),true,'a tab tap starts over');
+});
+
+test('"Нові контакти" opens the list even if a contact was left open',async t=>{
+  const w=await screen(t,{handler:path=>path.startsWith('/api/v1/contacts')?response({items:[{...contact(1),configured:false},contact(2)],has_more:false}):null});
+  const d=w.document; await tick();
+  d.querySelector('#navigation [data-view=contacts]').click(); await tick();
+  d.querySelector('[data-contact-id="2"]').click();
+  d.querySelector('#navigation [data-view=overview]').click(); await tick();
+  d.querySelector('#attention [data-view=contacts]').click(); await tick();
+  assert.equal(d.querySelector('#contact-layout').classList.contains('editing'),false);
+  assert.equal(d.querySelector('#page-title').textContent,'Контакти');
+});
