@@ -112,6 +112,7 @@
   };
 
   async function submit(form, callback) {
+    if (form.dataset.dirty !== "true" && !form.classList.contains("needs-save")) return;
     const button = $("button[type=submit]", form);
     const original = button.textContent;
     $$(".field-error", form).forEach(node => node.remove());
@@ -121,7 +122,7 @@
     try {
       const saved = await callback();
       if (saved === false) return;
-      setDirty(form, false);
+      markClean(form);
       toast("Збережено");
       tg?.HapticFeedback?.notificationOccurred?.("success");
     } catch (error) {
@@ -144,6 +145,26 @@
       button.disabled = false;
       button.textContent = original;
     }
+  }
+
+  // A form is unsaved only while its values differ from what was loaded or last
+  // saved: switching something off and back on again leaves nothing to save.
+  const baselines = new WeakMap();
+
+  function formSnapshot(form) {
+    return JSON.stringify($$("input, select, textarea", form)
+      .filter((field) => !field.closest("[data-no-dirty]") && !["button", "submit"].includes(field.type))
+      .map((field) => (field.type === "checkbox" || field.type === "radio" ? field.checked : field.value)));
+  }
+
+  function markClean(form) {
+    baselines.set(form, formSnapshot(form));
+    setDirty(form, false);
+  }
+
+  function refreshDirty(form) {
+    if (!baselines.has(form)) return;
+    setDirty(form, formSnapshot(form) !== baselines.get(form));
   }
 
   function setDirty(form, dirty) {
@@ -359,6 +380,7 @@
     form.elements.mark_read.checked = data.mark_read;
     form.elements.max_auto_replies_per_window.value = data.max_auto_replies_per_window || 0;
     renderDelayRanges();
+    markClean(form);
   }
 
   function renderPreviewScope() {
@@ -379,6 +401,7 @@
     form.elements.confirm_text.value = data.confirm_text;
     form.elements.decline_text.value = data.decline_text;
     $("#escalation-badge").textContent = data.enabled ? `${data.price_amount} ${data.currency}` : "Вимкнено";
+    markClean(form);
   }
 
   function renderDelayRanges() {
@@ -406,7 +429,7 @@
     $(".remove-window", node).addEventListener("click", () => {
       if (!window.confirm("Видалити цей інтервал? Зміна набуде чинності після збереження.")) return;
       node.remove();
-      setDirty(container.closest("form"), true);
+      refreshDirty(container.closest("form"));
       if (container.id === "contact-windows") renderContactScheduleEditor();
     });
     container.append(node);
@@ -451,6 +474,7 @@
     const container = $("#schedule-windows");
     container.innerHTML = "";
     data.windows.forEach((window) => createWindow(container, window));
+    markClean($("#schedule-form"));
   }
 
   function directionsPayload() {
@@ -470,7 +494,12 @@
   }
 
   function renderDirections(directions) {
-    $("#direction-list").innerHTML = directions.map((direction) => {
+    $("#direction-list").innerHTML = directions.map(directionCard).join("");
+    $$(".direction-card").forEach(renderDirectionHead);
+  }
+
+  function directionCard(direction) {
+    {
       const custom = !["general", "money"].includes(direction.code);
       const toggle = direction.code === "general"
         ? ""
@@ -487,8 +516,7 @@
             ${custom ? '<button type="button" class="chip-button danger remove-direction">Видалити тип</button>' : ""}
           </details>
         </article>`;
-    }).join("");
-    $$(".direction-card").forEach(renderDirectionHead);
+    }
   }
 
   function renderDirectionHead(card) {
@@ -520,11 +548,22 @@
     return false;
   }
 
-  // Changing the types makes the AI instruction stale; saving then regenerates it first.
-  function setClassifierGenerationState(stale) {
+  // The AI instruction is stale only while the types differ from the ones it was
+  // generated for; saving then regenerates it first. Undoing a change undoes that.
+  function typesSnapshot() {
+    return JSON.stringify(directionsPayload().map((d) => [d.code, d.label.trim(), d.description.trim(), d.is_active]));
+  }
+
+  function rememberRules() {
+    state.rulesTypes = typesSnapshot();
+    state.rulesPrompt = $("#classifier-form").elements.system_prompt.value;
+    refreshClassifierRules();
+  }
+
+  function refreshClassifierRules() {
     const form = $("#classifier-form");
-    form.dataset.promptStale = String(stale);
-    if (!stale) form.dataset.promptEdited = "false";
+    form.dataset.promptStale = String(typesSnapshot() !== state.rulesTypes);
+    form.dataset.promptEdited = String(form.elements.system_prompt.value !== state.rulesPrompt);
   }
 
   function fillClassifier() {
@@ -535,7 +574,8 @@
     form.elements.system_prompt.value = data.system_prompt;
     form.elements.model.value = data.model;
     form.elements.confidence_min.value = data.confidence_min;
-    setClassifierGenerationState(false);
+    rememberRules();
+    markClean(form);
   }
 
   function fillSummary() {
@@ -556,7 +596,9 @@
     $("#disconnect-summary-channel").classList.toggle("hidden", !connected);
     $("#choose-summary-channel").classList.toggle("hidden", !tg?.requestChat);
     if (!tg?.requestChat) $("#summary-channel-fallback").open = true;
-    if (unsaved) { form.elements.summary_time.value = unsaved.time; form.elements.message_retention_enabled.checked = unsaved.retention; }
+    markClean(form);
+    // A channel connected meanwhile must not discard the owner's other edits.
+    if (unsaved) { form.elements.summary_time.value = unsaved.time; form.elements.message_retention_enabled.checked = unsaved.retention; refreshDirty(form); }
   }
 
   const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -675,6 +717,7 @@
     contact.windows.forEach((window) => createWindow(windows, window));
     renderContactScheduleEditor();
     renderExclusionUntil();
+    markClean(form);
   }
 
   function renderExclusionUntil() {
@@ -836,7 +879,7 @@
     $("#more-contacts").addEventListener("click", () => loadContacts(true));
     $("#more-logs").addEventListener("click", () => loadLogs(true));
     $$("form").filter(form => !form.id.endsWith("filter") && form.id !== "preview-form").forEach(form => {
-      const track = (event) => { if (!event.target.closest?.("[data-no-dirty]")) setDirty(form, true); };
+      const track = (event) => { if (!event.target.closest?.("[data-no-dirty]")) refreshDirty(form); };
       form.addEventListener("input", track);
       form.addEventListener("change", track);
     });
@@ -933,7 +976,7 @@
       state.bootstrap.escalation = await api("/api/v1/escalation", { method: "PUT", body: JSON.stringify({ enabled: form.elements.enabled.checked, price_amount: form.elements.price_amount.value, currency: form.elements.currency.value.trim().toUpperCase(), offer_text: form.elements.offer_text.value, confirm_text: form.elements.confirm_text.value, decline_text: form.elements.decline_text.value }) });
       fillEscalation();
     }); });
-    $("#add-schedule-window").addEventListener("click", () => { createWindow($("#schedule-windows")); setDirty($("#schedule-form"), true); });
+    $("#add-schedule-window").addEventListener("click", () => { createWindow($("#schedule-windows")); refreshDirty($("#schedule-form")); });
     $("#schedule-form").addEventListener("submit", (event) => { event.preventDefault(); submit(event.currentTarget, async () => {
       const windows = windowsPayload($("#schedule-windows"));
       if (!windows.length) throw new Error("Додайте хоча б одне вікно");
@@ -949,7 +992,6 @@
     $("#contact-search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadContacts, 250); });
     $("#contact-form").addEventListener("change", (event) => { if (event.target.name === "exclusion") renderExclusionUntil(); });
     $("#add-contact-window").addEventListener("click", () => {
-      setDirty($("#contact-form"), true);
       const container = $("#contact-windows");
       if (!$(".window-row", container)) {
         const inheritedWindows = state.bootstrap.schedule.windows.filter((window) => window.is_active);
@@ -958,12 +1000,13 @@
         createWindow(container);
       }
       renderContactScheduleEditor();
+      refreshDirty($("#contact-form"));
     });
     $("#reset-contact-windows").addEventListener("click", () => {
       if (!window.confirm("Повернути основний розклад? Зміна набуде чинності після збереження.")) return;
-      setDirty($("#contact-form"), true);
       $("#contact-windows").innerHTML = "";
       renderContactScheduleEditor();
+      refreshDirty($("#contact-form"));
     });
     $("#contact-form").addEventListener("submit", (event) => { event.preventDefault(); if (!state.selectedContact) return; submit(event.currentTarget, async () => {
       const form = event.currentTarget;
@@ -979,35 +1022,29 @@
       countNewContacts();
     }); });
     $("#add-direction").addEventListener("click", () => {
-      const directions = directionsPayload();
-      if (directions.length >= 30) { toast("Можна додати до 30 типів"); return; }
-      directions.push({code: `type_${crypto.randomUUID().replaceAll("-", "")}`, label: "", description: "", keywords: [], reply_template: "", is_active: true});
-      renderDirections(directions);
+      if ($$(".direction-card").length >= 30) { toast("Можна додати до 30 типів"); return; }
+      // Appended on its own, so the other cards keep their open sections and text as typed.
+      $("#direction-list").insertAdjacentHTML("beforeend", directionCard({code: `type_${crypto.randomUUID().replaceAll("-", "")}`, label: "", description: "", keywords: [], reply_template: "", is_active: true}));
       const card = $$(".direction-card").at(-1);
+      renderDirectionHead(card);
       $(".direction-template", card).focus();
       card.scrollIntoView({behavior: "smooth", block: "center"});
-      setClassifierGenerationState(true);
-      $("#classifier-form").dispatchEvent(new Event("input", {bubbles: true}));
+      refreshClassifierRules();
+      refreshDirty($("#classifier-form"));
     });
     $("#direction-list").addEventListener("click", (event) => {
       if (!event.target.closest(".remove-direction")) return;
       event.target.closest(".direction-card").remove();
-      setClassifierGenerationState(true);
-      $("#classifier-form").dispatchEvent(new Event("input", {bubbles: true}));
+      refreshClassifierRules();
+      refreshDirty($("#classifier-form"));
     });
-    $("#classifier-form").elements.system_prompt.addEventListener("input", (event) => { event.currentTarget.form.dataset.promptEdited = "true"; });
-    $("#direction-list").addEventListener("input", (event) => {
+    $("#classifier-form").elements.system_prompt.addEventListener("input", refreshClassifierRules);
+    const onTypeEdit = (event) => {
       if (event.target.matches(".direction-label, .direction-active")) renderDirectionHead(event.target.closest(".direction-card"));
-      if (event.target.matches(".direction-label, .direction-description, .direction-active")) {
-        setClassifierGenerationState(true);
-      }
-    });
-    $("#direction-list").addEventListener("change", (event) => {
-      if (event.target.matches(".direction-active")) {
-        renderDirectionHead(event.target.closest(".direction-card"));
-        setClassifierGenerationState(true);
-      }
-    });
+      refreshClassifierRules();
+    };
+    $("#direction-list").addEventListener("input", onTypeEdit);
+    $("#direction-list").addEventListener("change", onTypeEdit);
     // Changed types need a fresh AI instruction; saving produces it first, so the
     // owner never has to run a separate generation step.
     async function regenerateRules(form) {
@@ -1028,7 +1065,7 @@
         $(".direction-keywords", card).value = keywordsByCode.get(card.dataset.code).join(", ");
       });
       form.elements.system_prompt.value = result.system_prompt;
-      setClassifierGenerationState(false);
+      rememberRules();
     }
     $("#classifier-form").addEventListener("submit", (event) => {
       event.preventDefault();
@@ -1061,6 +1098,7 @@
         const accepted = window.confirm("Увімкнути зашифроване зберігання текстів повідомлень на строк до 48 годин для формування добового підсумку?");
         if (!accepted) {
           form.elements.message_retention_enabled.checked = false;
+          refreshDirty(form);
           toast("Зберігання залишилось вимкненим");
           return false;
         }
@@ -1069,6 +1107,7 @@
         state.bootstrap.summary = await api("/api/v1/summary", { method: "PUT", body: JSON.stringify({ summary_time: form.elements.summary_time.value, summary_channel_id: form.elements.summary_channel_id.value ? Number(form.elements.summary_channel_id.value) : null, message_retention_enabled: enableRetention }) });
       } catch (error) {
         form.elements.message_retention_enabled.checked = state.bootstrap.summary.message_retention_enabled;
+        refreshDirty(form);
         throw error;
       }
       fillSummary();

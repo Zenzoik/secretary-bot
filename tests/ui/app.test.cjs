@@ -127,6 +127,7 @@ test('adding a schedule window marks the form dirty and enables explicit discard
 test('validation stays visible and identifies the invalid field',async t=>{
   const w=await screen(t,{handler:path=>path==='/api/v1/delivery'?response({detail:[{loc:['body','delay_min_seconds'],msg:'Завеликий мінімум'}]},422):null});
   const form=w.document.querySelector('#delivery-form');
+  form.elements.delay_max_seconds.value='90'; form.elements.delay_max_seconds.dispatchEvent(new w.Event('input',{bubbles:true}));
   form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await tick();await tick();
   assert.equal(form.elements.delay_min_seconds.getAttribute('aria-invalid'),'true');
   assert.match(form.querySelector('.field-error').textContent,/Завеликий мінімум/);
@@ -208,6 +209,7 @@ test('saving the global schedule refreshes the open contact without losing its d
   const saveSchedule = async start => {
     d.querySelector('#schedule-windows .time-from').value = start;
     d.querySelector('#timezone-select').value = 'Europe/Prague';
+    d.querySelector('#schedule-form').dispatchEvent(new w.Event('input', {bubbles:true}));
     d.querySelector('#schedule-form').dispatchEvent(new w.Event('submit', {bubbles:true,cancelable:true}));
     await tick(); await tick();
   };
@@ -464,7 +466,9 @@ test('a failed AI refresh saves only with consent and keeps the manual instructi
   form.elements.system_prompt.value = 'Моя вручну відредагована інструкція';
   const toggle = doc.querySelector('[data-code="money"] .direction-active');
   toggle.click();
-  w.confirm = () => false;
+  // First the owner agrees to replace the hand-edited instruction, then declines
+  // to save once the AI call has failed.
+  const answers = [true, false]; w.confirm = () => answers.shift();
   form.dispatchEvent(new w.Event('submit', {bubbles:true,cancelable:true})); await tick(); await tick(); await tick();
   assert.deepEqual(calls.map(([kind]) => kind), ['expand']);
   assert.equal(form.elements.system_prompt.value, 'Моя вручну відредагована інструкція');
@@ -682,4 +686,81 @@ test('"Нові контакти" opens the list even if a contact was left open
   d.querySelector('#attention [data-view=contacts]').click(); await tick();
   assert.equal(d.querySelector('#contact-layout').classList.contains('editing'),false);
   assert.equal(d.querySelector('#page-title').textContent,'Контакти');
+});
+
+test('undoing a change leaves nothing to save and the AI rules untouched',async t=>{
+  const calls=[];
+  const w=await classifierScreen(t,calls);
+  const doc=w.document; const form=doc.querySelector('#classifier-form');
+  const toggle=doc.querySelector('[data-code="money"] .direction-active');
+  toggle.click();
+  assert.equal(form.dataset.dirty,'true');
+  assert.equal(form.dataset.promptStale,'true');
+  toggle.click();
+  assert.equal(form.dataset.dirty,'false');
+  assert.equal(form.dataset.promptStale,'false');
+  const reply=doc.querySelector('[data-code="general"] .direction-template');
+  const original=reply.value;
+  reply.value=original+'!'; reply.dispatchEvent(new w.Event('input',{bubbles:true}));
+  assert.equal(form.dataset.dirty,'true');
+  reply.value=original; reply.dispatchEvent(new w.Event('input',{bubbles:true}));
+  assert.equal(form.dataset.dirty,'false');
+  form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true})); await tick(); await tick();
+  assert.deepEqual(calls,[],'an unchanged form is never sent');
+  doc.querySelector('#add-direction').click();
+  assert.equal(form.dataset.dirty,'true');
+  [...doc.querySelectorAll('.direction-card')].at(-1).querySelector('.remove-direction').click();
+  assert.equal(form.dataset.dirty,'false');
+  assert.equal(form.dataset.promptStale,'false');
+});
+
+test('every settings form forgets a change that was undone',async t=>{
+  const w=await screen(t,{handler:path=>path.startsWith('/api/v1/contacts')?response({items:[contact(100)],has_more:false}):null});
+  const d=w.document;
+  const flip=(form,field,value)=>{const old=field.type==='checkbox'?field.checked:field.value;
+    if(field.type==='checkbox')field.checked=!old;else field.value=value;field.dispatchEvent(new w.Event('input',{bubbles:true}));
+    assert.equal(form.dataset.dirty,'true',form.id);
+    if(field.type==='checkbox')field.checked=old;else field.value=old;field.dispatchEvent(new w.Event('change',{bubbles:true}));
+    assert.equal(form.dataset.dirty,'false',form.id);};
+  const delivery=d.querySelector('#delivery-form'); flip(delivery,delivery.elements.mark_read);
+  const escalation=d.querySelector('#escalation-form'); flip(escalation,escalation.elements.offer_text,'Інший текст');
+  const summary=d.querySelector('#summary-form'); flip(summary,summary.elements.summary_time,'07:15');
+  const schedule=d.querySelector('#schedule-form'); flip(schedule,schedule.querySelector('.time-from'),'21:00');
+  d.querySelector('#add-schedule-window').click();
+  assert.equal(schedule.dataset.dirty,'true');
+  schedule.querySelectorAll('.remove-window')[1].click();
+  assert.equal(schedule.dataset.dirty,'false','adding and removing an interval is no change');
+  d.querySelector('#navigation [data-view=contacts]').click(); await tick();
+  d.querySelector('[data-contact-id="100"]').click();
+  const contactForm=d.querySelector('#contact-form');
+  contactForm.elements.exclusion.value='forever'; contactForm.elements.exclusion[2].dispatchEvent(new w.Event('change',{bubbles:true}));
+  assert.equal(contactForm.dataset.dirty,'true');
+  contactForm.elements.exclusion.value='none'; contactForm.elements.exclusion[0].dispatchEvent(new w.Event('change',{bubbles:true}));
+  assert.equal(contactForm.dataset.dirty,'false');
+});
+
+test('declining to store texts leaves the summary form unchanged',async t=>{
+  const calls=[];
+  const w=await screen(t,{handler:path=>{ if(path==='/api/v1/summary'){calls.push(path);return response({});} }});
+  const form=w.document.querySelector('#summary-form');
+  const box=form.elements.message_retention_enabled;
+  box.checked=true; box.dispatchEvent(new w.Event('change',{bubbles:true}));
+  assert.equal(form.dataset.dirty,'true');
+  w.confirm=()=>false;
+  form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true})); await tick(); await tick();
+  assert.equal(box.checked,false);
+  assert.equal(form.dataset.dirty,'false');
+  assert.deepEqual(calls,[]);
+});
+
+test('adding a type keeps the other cards as they are',async t=>{
+  const w=await screen(t);
+  const doc=w.document;
+  const money=doc.querySelector('[data-code="money"]');
+  money.querySelector('.direction-more').open=true;
+  const keywords=money.querySelector('.direction-keywords'); keywords.value='a,b'; keywords.dispatchEvent(new w.Event('input',{bubbles:true}));
+  doc.querySelector('#add-direction').click();
+  assert.equal(doc.querySelector('[data-code="money"]'),money,'the card is not re-rendered');
+  assert.equal(money.querySelector('.direction-more').open,true);
+  assert.equal(keywords.value,'a,b');
 });
