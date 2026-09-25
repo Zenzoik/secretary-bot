@@ -926,6 +926,39 @@ async def test_built_in_type_reply_is_the_shared_template(database):
 
 
 @pytest.mark.asyncio
+async def test_contact_stats_count_each_contact_once(database):
+    owner = await seed_owner(database)
+    other = await seed_owner(database, user_id=43)
+    now = datetime.now(UTC)
+    async with database.session() as session, session.begin():
+        session.add_all(
+            [
+                models.ContactActivity(connection_id=owner, contact_id=1, configured_at=now),
+                models.ContactActivity(connection_id=owner, contact_id=2, configured_at=now),
+                models.ContactActivity(connection_id=owner, contact_id=3, configured_at=now),
+                models.ContactActivity(connection_id=owner, contact_id=4, configured_at=now),
+                models.ContactActivity(connection_id=owner, contact_id=5),
+                models.ContactActivity(connection_id=other, contact_id=9, configured_at=now),
+                models.Exclusion(connection_id=owner, contact_id=2, until=None),
+                models.Exclusion(
+                    connection_id=owner, contact_id=3, until=now + timedelta(days=1)
+                ),
+                # An expired pause counts as answered again.
+                models.Exclusion(
+                    connection_id=owner, contact_id=4, until=now - timedelta(minutes=1)
+                ),
+            ]
+        )
+    async with AsyncClient(
+        transport=ASGITransport(app=web_app(database)), base_url="https://testserver"
+    ) as client:
+        stats = await client.get("/api/v1/contacts/stats", headers=headers())
+
+    assert stats.status_code == 200
+    assert stats.json() == {"active": 2, "paused": 1, "never": 1, "new": 1}
+
+
+@pytest.mark.asyncio
 async def test_expansion_is_authenticated_preview_and_errors_preserve_prompt(database):
     await seed_owner(database)
 

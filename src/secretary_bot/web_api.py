@@ -659,6 +659,14 @@ def build_web_router(
             )
             return {"items": items[:100], "has_more": len(items) > 100, "next_offset": offset + 100}
 
+    @router.get("/api/v1/contacts/stats")
+    async def contact_stats(request: Request) -> dict[str, int]:
+        async with database.session() as session, session.begin():
+            principal = await api.authorize(session, request)
+            return await _contact_stats(
+                session, principal.connection.id, require_setup=settings.require_contact_setup
+            )
+
     @router.put("/api/v1/contacts/{contact_id}")
     async def update_contact(
         request: Request,
@@ -1282,6 +1290,36 @@ async def _contacts(
         order.insert(0, models.ContactActivity.configured_at.is_(None).desc())
     rows = list(await session.scalars(query.order_by(*order).offset(offset).limit(101)))
     return await _contact_rows(session, connection_id, rows, require_setup=require_setup)
+
+
+async def _contact_stats(
+    session: AsyncSession, connection_id: int, *, require_setup: bool = True
+) -> dict[str, int]:
+    """How many contacts the bot answers, has paused, never answers, or waits to review."""
+    now = datetime.now(UTC)
+    exclusions = {
+        row.contact_id: row.until
+        for row in await session.scalars(
+            select(models.Exclusion).where(models.Exclusion.connection_id == connection_id)
+        )
+    }
+    stats = {"active": 0, "paused": 0, "never": 0, "new": 0}
+    for contact_id, configured_at in await session.execute(
+        select(models.ContactActivity.contact_id, models.ContactActivity.configured_at).where(
+            models.ContactActivity.connection_id == connection_id
+        )
+    ):
+        excluded = contact_id in exclusions
+        until = exclusions.get(contact_id)
+        if require_setup and configured_at is None:
+            stats["new"] += 1
+        elif excluded and until is None:
+            stats["never"] += 1
+        elif excluded and until > now:
+            stats["paused"] += 1
+        else:
+            stats["active"] += 1
+    return stats
 
 
 async def _contact(
