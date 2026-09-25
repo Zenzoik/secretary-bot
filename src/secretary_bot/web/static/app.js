@@ -302,6 +302,7 @@
       ? "Окремий час для цього контакту"
       : "Зараз використовується основний розклад";
     $("#add-contact-window").textContent = hasPersonalSchedule ? "+ Додати інтервал" : "Змінити для контакту";
+    $("#add-contact-window").classList.toggle("edit-icon", !hasPersonalSchedule);
     $("#reset-contact-windows").classList.toggle("hidden", !hasPersonalSchedule);
     container.classList.toggle("hidden", !hasPersonalSchedule);
     const preview = $("#contact-schedule-preview");

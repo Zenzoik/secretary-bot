@@ -346,3 +346,22 @@ test('failed expansion preserves manually edited master prompt', async t => {
   assert.equal(form.elements.system_prompt.value, 'Моя вручну відредагована інструкція');
   assert.equal(w.document.querySelector('#expand-classifier').disabled, false);
 });
+
+test('paid escalation is collapsed until opened and schedule override is a button', async t => {
+  const w = await screen(t);
+  const doc = w.document;
+  const details = doc.querySelector('#escalation-details');
+  assert.equal(details.open, false);
+  assert.ok(details.querySelector('summary #escalation-badge'));
+  assert.equal(doc.querySelector('#escalation-form').elements.enabled.closest('details'), details);
+  assert.equal(doc.querySelector('#add-contact-window').classList.contains('chip-button'), true);
+});
+
+test('failed expansion preserves manually edited master prompt', async t => {
+  const w = await screen(t, {handler: path => path === '/api/v1/classifier/expand' ? response({detail:'ШІ недоступний'},503) : null});
+  const form = w.document.querySelector('#classifier-form');
+  form.elements.system_prompt.value = 'Моя вручну відредагована інструкція';
+  w.document.querySelector('#expand-classifier').click(); await tick(); await tick();
+  assert.equal(form.elements.system_prompt.value, 'Моя вручну відредагована інструкція');
+  assert.equal(w.document.querySelector('#expand-classifier').disabled, false);
+});

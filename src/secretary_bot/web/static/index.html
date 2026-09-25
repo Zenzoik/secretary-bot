@@ -9,10 +9,10 @@
     <meta property="og:description" content="Налаштування без зайвих кроків">
     <meta property="og:image" content="{{BASE_URL}}/assets/og.png">
     <title>Personal Secretary — налаштування</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260924-contact-setup1">
+    <link rel="stylesheet" href="/assets/styles.css?v=20260925-escalation1">
     <script id="telegram-web-app-sdk" src="https://telegram.org/js/telegram-web-app.js?59" async></script>
     <script src="/assets/ui-utils.js?v=20260907-sdk-fallback1" defer></script>
-    <script src="/assets/app.js?v=20260924-contact-setup1" defer></script>
+    <script src="/assets/app.js?v=20260925-escalation1" defer></script>
   </head>
   <body>
     <div class="app-shell" id="app" aria-busy="true">
@@ -115,11 +115,12 @@
               </label>
               <div class="form-actions"><button class="primary" type="submit">Зберегти доставку</button></div>
             </form>
-            <form class="panel" id="escalation-form">
-              <div class="panel-heading">
+            <form class="panel collapsible-panel" id="escalation-form">
+              <details id="escalation-details">
+              <summary class="panel-heading collapsible-summary">
                 <div><p class="eyebrow">Поза графіком</p><h2>Платне термінове звернення</h2></div>
-                <span class="badge neutral" id="escalation-badge">Вимкнено</span>
-              </div>
+                <span class="collapsible-state"><span class="badge neutral" id="escalation-badge">Вимкнено</span><span class="chevron" aria-hidden="true"></span></span>
+              </summary>
               <p class="muted">Після звичайної автовідповіді клієнт побачить кнопку «Терміново». Платне звернення зараховується лише після окремого підтвердження ціни.</p>
               <label class="switch-row"><span><strong>Дозволити платну ескалацію</strong><small>Без підтвердження клієнта лічильник не збільшується</small></span><input name="enabled" type="checkbox" role="switch"></label>
               <div class="form-grid two">
@@ -130,6 +131,7 @@
               <label>Текст після підтвердження<textarea name="confirm_text" rows="3" maxlength="1000" required></textarea></label>
               <label>Текст відмови власника<textarea name="decline_text" rows="3" maxlength="1000" required></textarea></label>
               <div class="form-actions"><button class="primary" type="submit">Зберегти ескалацію</button></div>
+              </details>
             </form>
           </section>
 
@@ -167,8 +169,8 @@
                     <div class="subheading contact-schedule-heading">
                       <div><strong>Коли бот відповідає</strong><small id="contact-schedule-source"></small></div>
                       <div class="contact-schedule-actions">
-                        <button class="text-button hidden" id="reset-contact-windows" type="button">Використати основний</button>
-                        <button class="text-button" id="add-contact-window" type="button">Змінити для контакту</button>
+                        <button class="chip-button hidden" id="reset-contact-windows" type="button">Використати основний</button>
+                        <button class="chip-button accent edit-icon" id="add-contact-window" type="button">Змінити для контакту</button>
                       </div>
                     </div>
                     <div class="effective-schedule" id="contact-schedule-preview"></div>
