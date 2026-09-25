@@ -573,7 +573,7 @@
   }
 
   function renderDirectionHead(card) {
-    $(".direction-title", card).textContent = $(".direction-label", card).value.trim() || "Новий тип";
+    $(".direction-title", card).textContent = $(".direction-label", card).value.trim() || "Новий шаблон";
     const toggle = $(".direction-active", card);
     if (!toggle) return;
     toggle.setAttribute("aria-label", `Тип «${$(".direction-title", card).textContent}»`);
@@ -1085,7 +1085,7 @@
       loadContactStats();
     }); });
     $("#add-direction").addEventListener("click", () => {
-      if ($$(".direction-card").length >= 30) { toast("Можна додати до 30 типів"); return; }
+      if ($$(".direction-card").length >= 30) { toast("Можна додати до 30 шаблонів"); return; }
       // Appended on its own, so the other cards keep their open sections and text as typed.
       $("#direction-list").insertAdjacentHTML("beforeend", directionCard({code: `type_${crypto.randomUUID().replaceAll("-", "")}`, label: "", description: "", keywords: [], reply_template: "", is_active: true}));
       const card = $$(".direction-card").at(-1);

@@ -813,7 +813,7 @@ test('the replies section is named for templates and hides the model',async t=>{
   const d=w.document;
   assert.equal(d.querySelector('#page-title').textContent,'Шаблони відповідей');
   assert.equal(d.querySelector('#navigation [data-view=classifier]').textContent.trim(),'Шаблони');
-  assert.equal(d.querySelector('#add-direction').textContent,'+ Тип відповіді');
+  assert.equal(d.querySelector('#add-direction').textContent,'+ Шаблон відповіді');
   const model=d.querySelector('#classifier-form').elements.model;
   assert.equal(model.type,'hidden');
   assert.equal(model.value,base.classifier.model);
