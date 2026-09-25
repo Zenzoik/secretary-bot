@@ -122,7 +122,10 @@ class Pipeline:
                     contact_username=incoming.contact_username,
                 )
                 contact = await self._contact_state(session, connection.id, incoming.contact_id)
-                if contact.exclusion is None or not contact.exclusion.covers(incoming.received_at):
+                # A contact the owner has not reviewed stays out of the daily summary.
+                if contact.configured and (
+                    contact.exclusion is None or not contact.exclusion.covers(incoming.received_at)
+                ):
                     await self._capture_incoming(session, connection, incoming, direction="out")
                 return
             if incoming.filter_result is HardFilterResult.UNSUPPORTED_CONTENT:
@@ -156,6 +159,7 @@ class Pipeline:
                 GateDecision.SKIPPED_INACTIVE,
                 GateDecision.SKIPPED_KILL_SWITCH,
                 GateDecision.SKIPPED_EXCLUDED,
+                GateDecision.SKIPPED_UNCONFIGURED,
             }:
                 await self._capture_incoming(session, connection, incoming, direction="in")
             if gate.decision is not GateDecision.ALLOWED:

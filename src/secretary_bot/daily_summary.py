@@ -51,6 +51,7 @@ class DailySummary:
     model: SummaryLanguageModel | None
     classifier_defaults: ClassifierSettings
     summary_timeout_seconds: float = 60.0
+    require_contact_setup: bool = True
 
     async def run_once(self, *, now: datetime | None = None) -> int:
         moment = now or datetime.now(UTC)
@@ -238,6 +239,7 @@ class DailySummary:
                 period_end=period_end,
                 now=now,
                 cipher=self.cipher,
+                configured_only=self.require_contact_setup,
             )
             settings = await load_classifier_settings(
                 session, connection.id, defaults=self.classifier_defaults

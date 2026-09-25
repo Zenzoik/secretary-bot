@@ -28,6 +28,7 @@ from secretary_bot.storage import (
     Database,
     capture_message,
     load_access_user,
+    load_contact_state,
     load_owner_connection,
     log_decision,
     normalize_contact_username,
@@ -56,6 +57,7 @@ class SummaryActions:
     bot: SummaryActionBot
     sender: BusinessReplySender
     cipher: MessageCipher | None = None
+    require_contact_setup: bool = True
 
     async def handle_callback(self, query: CallbackQuery, *, now: datetime | None = None) -> bool:
         direct = parse_direct_reply_callback(query.data)
@@ -175,10 +177,15 @@ class SummaryActions:
                 occurred_at=moment,
             )
             await record_owner_reply(session, connection.id, contact_id, at=moment)
+            contact = await load_contact_state(
+                session, connection.id, contact_id, require_setup=self.require_contact_setup
+            )
+            # A contact the owner has not reviewed stays out of the daily summary.
             if (
                 connection.message_retention_enabled
                 and self.cipher is not None
                 and not result.replayed
+                and contact.configured
             ):
                 context = MessageContext(connection.id, contact_id, result.message_id, "out")
                 encrypted = self.cipher.encrypt(text, context=context)

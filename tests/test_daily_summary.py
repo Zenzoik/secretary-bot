@@ -107,6 +107,7 @@ async def test_daily_summary_sends_active_dialogue_once_and_persists_items(datab
                 contact_id=100,
                 contact_name="Клієнт",
                 contact_username="client_test",
+                configured_at=SCHEDULED - timedelta(days=1),
             )
         )
         await seed_message(
@@ -241,6 +242,7 @@ async def test_timezone_change_does_not_resend_hours_already_summarised(database
                 contact_id=100,
                 contact_name="Клієнт",
                 contact_username="client_test",
+                configured_at=SCHEDULED - timedelta(days=1),
             )
         )
         await seed_message(
@@ -326,3 +328,55 @@ async def test_summary_period_obeys_local_time_and_connection_state(database) ->
         connection = await load_owner_connection(session, 42)
     assert connection is not None
     assert summary_period(connection, now=NOW) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("require_setup", [True, False])
+async def test_summary_leaves_out_contacts_the_owner_has_not_reviewed(
+    database, require_setup: bool
+) -> None:
+    cipher = MessageCipher.from_encoded_key(MessageCipher.generate_encoded_key())
+    async with database.session() as session, session.begin():
+        connection = await upsert_connection(
+            session,
+            ConnectionSnapshot(
+                business_connection_id="summary-connection",
+                owner_user_id=42,
+                owner_chat_id=42,
+                rights={"can_reply": True},
+            ),
+        )
+        row = await session.get(models.Connection, connection.id)
+        assert row is not None
+        row.message_retention_enabled = True
+        row.summary_time = time(12, 0)
+        # The bot stayed silent to this new contact, so it is no part of the summary.
+        session.add(
+            models.ContactActivity(connection_id=connection.id, contact_id=555, contact_name="Нові")
+        )
+        await seed_message(
+            session,
+            cipher,
+            connection_id=connection.id,
+            contact_id=555,
+            message_id=10,
+            direction="in",
+            text="Привіт, це новий контакт",
+            occurred_at=SCHEDULED - timedelta(hours=1),
+        )
+
+    model = FakeModel()
+    digest = DailySummary(
+        database=database,
+        bot=FakeBot(),
+        cipher=cipher,
+        model=model,
+        classifier_defaults=ClassifierSettings(),
+        require_contact_setup=require_setup,
+    )
+    await digest.run_once(now=NOW)
+
+    async with database.session() as session:
+        items = list(await session.scalars(select(models.SummaryItem.contact_id)))
+    assert items == ([] if require_setup else [555])
+    assert len(model.transcripts) == (0 if require_setup else 1)

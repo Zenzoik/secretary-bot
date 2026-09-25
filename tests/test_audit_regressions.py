@@ -352,7 +352,11 @@ async def test_stuck_summary_run_is_abandoned_and_newer_periods_continue(databas
                 destination_chat_id=42,
             )
         )
-        session.add(models.ContactActivity(connection_id=connection.id, contact_id=100))
+        session.add(
+            models.ContactActivity(
+                connection_id=connection.id, contact_id=100, configured_at=stuck_end
+            )
+        )
         await seed_message(
             session,
             cipher,

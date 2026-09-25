@@ -190,3 +190,47 @@ async def test_retained_dialogues_only_include_active_rows_inside_period(session
     assert dialogues[0].contact_username == "contact_test"
     assert [message.text for message in dialogues[0].messages] == ["Питання", "Відповідь"]
     assert dialogues[0].last_incoming_message_id == 10
+
+
+@pytest.mark.asyncio
+async def test_retained_dialogues_can_skip_contacts_the_owner_has_not_reviewed(session) -> None:
+    connection_id = await add_connection(session)
+    cipher = MessageCipher.from_encoded_key(MessageCipher.generate_encoded_key())
+    session.add_all(
+        [
+            models.ContactActivity(
+                connection_id=connection_id, contact_id=200, configured_at=NOW - timedelta(days=1)
+            ),
+            models.ContactActivity(connection_id=connection_id, contact_id=201),
+        ]
+    )
+    # 202 has retained text but no card at all: it is not reviewed either.
+    for contact_id in (200, 201, 202):
+        encrypted = cipher.encrypt(
+            "Привіт", context=MessageContext(connection_id, contact_id, 10, "in")
+        )
+        await capture_message(
+            session,
+            connection_id=connection_id,
+            contact_id=contact_id,
+            tg_message_id=10,
+            direction="in",
+            occurred_at=NOW - timedelta(hours=1),
+            body_encrypted=encrypted,
+            retention_until=NOW + timedelta(hours=47),
+        )
+
+    async def contacts(*, configured_only: bool) -> list[int]:
+        dialogues = await load_retained_dialogues(
+            session,
+            connection_id=connection_id,
+            period_start=NOW - timedelta(days=1),
+            period_end=NOW,
+            now=NOW,
+            cipher=cipher,
+            configured_only=configured_only,
+        )
+        return sorted(dialogue.contact_id for dialogue in dialogues)
+
+    assert await contacts(configured_only=True) == [200]
+    assert await contacts(configured_only=False) == [200, 201, 202]

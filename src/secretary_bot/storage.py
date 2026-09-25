@@ -938,8 +938,13 @@ async def load_retained_dialogues(
     period_end: datetime,
     now: datetime,
     cipher: MessageCipher,
+    configured_only: bool = False,
 ) -> list[RetainedDialogue]:
-    """Decrypt active retained rows in memory, grouped by dialogue and time."""
+    """Decrypt active retained rows in memory, grouped by dialogue and time.
+
+    configured_only drops contacts the owner has not reviewed yet: the bot stays
+    silent to them, so their chats do not belong in the owner's summary either.
+    """
     rows = list(
         await session.scalars(
             select(models.MessageLog)
@@ -985,16 +990,21 @@ async def load_retained_dialogues(
             models.ContactActivity.contact_id.in_(grouped),
         )
     )
-    contacts = {row.contact_id: (row.contact_name, row.contact_username) for row in activity_rows}
-    return [
-        RetainedDialogue(
-            contact_id=contact_id,
-            contact_name=contacts.get(contact_id, (None, None))[0],
-            messages=tuple(messages),
-            contact_username=contacts.get(contact_id, (None, None))[1],
+    activities = {row.contact_id: row for row in activity_rows}
+    dialogues = []
+    for contact_id, messages in grouped.items():
+        activity = activities.get(contact_id)
+        if configured_only and (activity is None or activity.configured_at is None):
+            continue
+        dialogues.append(
+            RetainedDialogue(
+                contact_id=contact_id,
+                contact_name=None if activity is None else activity.contact_name,
+                messages=tuple(messages),
+                contact_username=None if activity is None else activity.contact_username,
+            )
         )
-        for contact_id, messages in grouped.items()
-    ]
+    return dialogues
 
 
 async def record_incoming(

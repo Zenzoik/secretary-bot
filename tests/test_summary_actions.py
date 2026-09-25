@@ -357,3 +357,42 @@ def test_direct_reply_callback_parser(
     data: str, expected: tuple[str, int] | None
 ) -> None:
     assert parse_direct_reply_callback(data) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured", [False, True])
+async def test_direct_reply_text_is_retained_only_for_a_reviewed_contact(
+    database, configured: bool
+) -> None:
+    from secretary_bot.retention import MessageCipher
+
+    await seed_summary(database)
+    async with database.session() as session, session.begin():
+        connection = await session.scalar(select(models.Connection))
+        assert connection is not None
+        connection.message_retention_enabled = True
+        contact = await session.get(models.ContactActivity, (connection.id, 100))
+        assert contact is not None
+        contact.configured_at = NOW if configured else None
+    bot = FakeBot()
+    handler = SummaryActions(
+        database=database,
+        bot=bot,
+        sender=BusinessReplySender(bot=bot),
+        cipher=MessageCipher.from_encoded_key(MessageCipher.generate_encoded_key()),
+    )
+
+    await handler.handle_message(reply_message(BUTTON_SEND_BOT, reply_to_message_id=0), now=NOW)
+    await handler.handle_callback(callback("direct:select:100"), now=NOW)
+    assert await handler.handle_message(
+        reply_message("Надішлю документи", reply_to_message_id=102), now=NOW
+    )
+
+    assert any("business_connection_id" in message for message in bot.sent)
+    async with database.session() as session:
+        captured = await session.scalar(
+            select(func.count())
+            .select_from(models.MessageLog)
+            .where(models.MessageLog.action == LogAction.CAPTURED.value)
+        )
+    assert captured == (1 if configured else 0)

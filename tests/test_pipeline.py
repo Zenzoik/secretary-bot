@@ -293,6 +293,49 @@ async def test_new_contact_is_not_answered_until_the_owner_saves_its_rules(world
 
 
 @pytest.mark.asyncio
+async def test_new_contact_text_is_not_retained_for_the_summary(world) -> None:
+    pipeline, _, _, database = world
+    pipeline.message_cipher = MessageCipher.from_encoded_key(MessageCipher.generate_encoded_key())
+    await set_connection(database, message_retention_enabled=True)
+
+    await pipeline.process_incoming(message(chat_id=555, text="Коли зможемо поговорити?"))
+    await pipeline.process_incoming(
+        message(chat_id=555, message_id=8, filter_result=HardFilterResult.OWNER_MESSAGE)
+    )
+
+    async with database.session() as session:
+        captured = await session.scalar(
+            select(func.count())
+            .select_from(models.MessageLog)
+            .where(models.MessageLog.action == LogAction.CAPTURED.value)
+        )
+    assert captured == 0
+
+
+@pytest.mark.asyncio
+async def test_disabled_setup_rule_keeps_retaining_new_contact_text(world) -> None:
+    pipeline, _, _, database = world
+    pipeline.require_contact_setup = False
+    pipeline.message_cipher = MessageCipher.from_encoded_key(MessageCipher.generate_encoded_key())
+    await set_connection(database, message_retention_enabled=True)
+
+    await pipeline.process_incoming(message(chat_id=555))
+    await pipeline.process_incoming(
+        message(chat_id=555, message_id=8, filter_result=HardFilterResult.OWNER_MESSAGE)
+    )
+
+    async with database.session() as session:
+        directions = list(
+            await session.scalars(
+                select(models.MessageLog.direction)
+                .where(models.MessageLog.action == LogAction.CAPTURED.value)
+                .order_by(models.MessageLog.id)
+            )
+        )
+    assert directions == ["in", "out"]
+
+
+@pytest.mark.asyncio
 async def test_disabled_setup_rule_answers_new_contacts_as_before(world) -> None:
     pipeline, _, notifier, database = world
     pipeline.require_contact_setup = False
