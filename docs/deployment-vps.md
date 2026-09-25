@@ -244,27 +244,18 @@ feature commit locally, push `main`, and return the server to the branch with
 Restoring the dump replaces production data and requires explicit authorization
 (see `AGENTS.md`); it is not part of this rollback.
 
-## Trial deploy: branch `feature/minimal-mini-app`
+## Rollback: Mini App redesign (`c5470ee..e0b3007`)
 
-The redesigned Mini App runs on production from its feature branch so the
-owner can test it before merging. No migrations. Besides the static files it
-adds `GET /api/v1/contacts/stats` and makes a 00:00–00:00 schedule window
-mean the whole day. The previous release is `main` at `c5470ee`.
+The four-tab Mini App was tested on production from `feature/minimal-mini-app`
+and merged into `main` by fast-forward. No migrations. Besides the static
+files it adds `GET /api/v1/contacts/stats` and makes a 00:00–00:00 schedule
+window mean the whole day. The previous release is `c5470ee`.
 
-Deploy:
+Before rolling back, turn whole-day windows into 00:00–23:59: on `c5470ee` a
+00:00–00:00 window covers nothing and the bot would go silent.
 
 ```bash
 cd /root/secretary-bot
-git fetch origin
-git switch --track origin/feature/minimal-mini-app   # later: git pull --ff-only
-docker compose up -d --build
-```
-
-Roll back to `main`. On `main` a 00:00–00:00 window covers nothing, so first
-check whether "Цілодобово" was saved while the branch ran, and turn such
-windows into 00:00–23:59 so the bot keeps answering after the rollback:
-
-```bash
 docker compose exec -T postgres psql -U secretary -d secretary -Atc \
   "SELECT 'schedules', count(*) FROM schedules WHERE time_from = '00:00' AND time_to = '00:00'
    UNION ALL SELECT 'contact_windows', count(*) FROM contact_windows
@@ -273,20 +264,15 @@ docker compose exec -T postgres psql -U secretary -d secretary -Atc \
 docker compose exec -T postgres psql -U secretary -d secretary -c \
   "UPDATE schedules SET time_to = '23:59' WHERE time_from = '00:00' AND time_to = '00:00';
    UPDATE contact_windows SET time_to = '23:59' WHERE time_from = '00:00' AND time_to = '00:00'"
-```
-
-Then switch the code:
-
-```bash
-cd /root/secretary-bot
-git switch main
-git pull --ff-only
+git checkout c5470ee          # emergency: detached HEAD on the previous release
 docker compose up -d --build
 ```
 
-Run the health checks and verify the webhook after either step. Telegram may
-keep the old assets for a moment; the page references versioned asset URLs,
-so reopening the Mini App picks up the switch.
+Run the health checks and verify the webhook. Afterwards revert the redesign
+commits locally, push `main`, and return the server to the branch with
+`git checkout main && git pull --ff-only`, so it does not stay detached.
+Telegram may keep old assets for a moment; the page uses versioned asset
+URLs, so reopening the Mini App picks up the switch.
 
 ## Backup and transfer snapshot
 
