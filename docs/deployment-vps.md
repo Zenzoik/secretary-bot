@@ -247,9 +247,9 @@ Restoring the dump replaces production data and requires explicit authorization
 ## Trial deploy: branch `feature/minimal-mini-app`
 
 The redesigned Mini App runs on production from its feature branch so the
-owner can test it before merging. It changes only static files and UI tests:
-no migrations, no API or data changes. The previous release is `main` at
-`c5470ee`.
+owner can test it before merging. No migrations. Besides the static files it
+adds `GET /api/v1/contacts/stats` and makes a 00:00–00:00 schedule window
+mean the whole day. The previous release is `main` at `c5470ee`.
 
 Deploy:
 
@@ -260,7 +260,22 @@ git switch --track origin/feature/minimal-mini-app   # later: git pull --ff-only
 docker compose up -d --build
 ```
 
-Roll back to `main` (safe at any time, nothing to undo in the database):
+Roll back to `main`. On `main` a 00:00–00:00 window covers nothing, so first
+check whether "Цілодобово" was saved while the branch ran, and turn such
+windows into 00:00–23:59 so the bot keeps answering after the rollback:
+
+```bash
+docker compose exec -T postgres psql -U secretary -d secretary -Atc \
+  "SELECT 'schedules', count(*) FROM schedules WHERE time_from = '00:00' AND time_to = '00:00'
+   UNION ALL SELECT 'contact_windows', count(*) FROM contact_windows
+   WHERE time_from = '00:00' AND time_to = '00:00'"
+# only if a count is not zero:
+docker compose exec -T postgres psql -U secretary -d secretary -c \
+  "UPDATE schedules SET time_to = '23:59' WHERE time_from = '00:00' AND time_to = '00:00';
+   UPDATE contact_windows SET time_to = '23:59' WHERE time_from = '00:00' AND time_to = '00:00'"
+```
+
+Then switch the code:
 
 ```bash
 cd /root/secretary-bot
