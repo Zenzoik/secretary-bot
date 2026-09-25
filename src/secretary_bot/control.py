@@ -78,7 +78,8 @@ TIMEZONE_BUTTONS = ui.TIMEZONE_LABELS
 SCHEDULE_BUTTONS = {
     ui.SCHEDULE_LABELS[0]: (127, time(22, 0), time(8, 0)),
     ui.SCHEDULE_LABELS[1]: (31, time(18, 0), time(9, 0)),
-    ui.SCHEDULE_LABELS[2]: (127, time(0, 0), time(23, 59)),
+    # 00:00–00:00 is the whole day; 23:59 would leave a silent minute every night.
+    ui.SCHEDULE_LABELS[2]: (127, time(0, 0), time(0, 0)),
 }
 MUTE_BUTTONS = ui.MUTE_LABELS
 

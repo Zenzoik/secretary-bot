@@ -315,6 +315,8 @@ async def test_onboarding_fsm_persists_and_finishes_in_safe_dry_run(
         assert connection is not None
         assert connection.policy.timezone == "Europe/Prague"
         assert len(connection.policy.windows) == 1
+        # 24/7 really is around the clock, with no silent minute before midnight.
+        assert connection.policy.windows[0].full_day
     assert connection.dry_run is True
     assert connection.policy.kill_switch is False
     assert BUTTON_USERS not in keyboard_texts(bot.sent[-1])

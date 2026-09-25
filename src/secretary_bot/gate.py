@@ -6,6 +6,7 @@ from enum import StrEnum
 from zoneinfo import ZoneInfo
 
 DAY = timedelta(days=1)
+MIDNIGHT = time(0, 0)
 
 
 class GateDecision(StrEnum):
@@ -32,7 +33,14 @@ class QuietWindow:
         return bool(self.weekday_mask & (1 << day.weekday()))
 
     @property
+    def full_day(self) -> bool:
+        """00:00–00:00 is the one explicit way to say "around the clock"."""
+        return self.time_from == MIDNIGHT and self.time_to == MIDNIGHT
+
+    @property
     def duration(self) -> timedelta:
+        if self.full_day:
+            return DAY
         span = datetime.combine(date.min, self.time_to) - datetime.combine(date.min, self.time_from)
         return span % DAY
 
@@ -127,7 +135,8 @@ def current_window(
     A window whose ``time_to`` is not after ``time_from`` crosses midnight, so
     both today and yesterday are candidate start days. The weekday mask always
     refers to the day the window *starts* on. ``time_to == time_from`` covers
-    nothing: an ambiguous schedule keeps the bot silent.
+    nothing: an ambiguous schedule keeps the bot silent. The one exception is
+    00:00–00:00, the explicit whole day.
     """
     for occurrence in _occurrences(windows, local_now):
         if occurrence.starts_at <= local_now < occurrence.ends_at:

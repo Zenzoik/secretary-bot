@@ -183,7 +183,7 @@ def test_unknown_timezone_is_an_error_not_a_silent_pass() -> None:
 def test_inactive_and_empty_windows_are_ignored() -> None:
     windows = (
         QuietWindow(2, ALL_DAYS, time(22, 0), time(8, 0), is_active=False),
-        QuietWindow(3, ALL_DAYS, time(0, 0), time(0, 0)),
+        QuietWindow(3, ALL_DAYS, time(3, 0), time(3, 0)),
     )
 
     assert current_window(windows, datetime(2026, 8, 24, 3, 14, tzinfo=KYIV)) is None
@@ -228,3 +228,19 @@ def test_no_schedule_at_all_keeps_the_bot_silent() -> None:
     result = evaluate_gate(policy(windows=()), ContactState(), now=INSIDE_NIGHT)
 
     assert result.decision is GateDecision.SKIPPED_SCHEDULE
+
+
+def test_midnight_to_midnight_is_the_whole_day_and_other_equal_times_are_nothing() -> None:
+    whole_day = QuietWindow(
+        schedule_id=7, weekday_mask=MONDAY, time_from=time(0, 0), time_to=time(0, 0)
+    )
+    for hour, minute in ((0, 0), (12, 0), (23, 59)):
+        moment = datetime(2026, 8, 24, hour, minute, 30, tzinfo=KYIV)  # a Monday
+        occurrence = current_window((whole_day,), moment)
+        assert occurrence is not None and occurrence.key == "2026-08-24:7"
+    tuesday = datetime(2026, 8, 25, 0, 0, 30, tzinfo=KYIV)
+    assert current_window((whole_day,), tuesday) is None
+    ambiguous = QuietWindow(
+        schedule_id=8, weekday_mask=ALL_DAYS, time_from=time(9, 0), time_to=time(9, 0)
+    )
+    assert current_window((ambiguous,), datetime(2026, 8, 24, 9, 30, tzinfo=KYIV)) is None
