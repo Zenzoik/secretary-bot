@@ -244,6 +244,35 @@ feature commit locally, push `main`, and return the server to the branch with
 Restoring the dump replaces production data and requires explicit authorization
 (see `AGENTS.md`); it is not part of this rollback.
 
+## Trial deploy: branch `feature/minimal-mini-app`
+
+The redesigned Mini App runs on production from its feature branch so the
+owner can test it before merging. It changes only static files and UI tests:
+no migrations, no API or data changes. The previous release is `main` at
+`c5470ee`.
+
+Deploy:
+
+```bash
+cd /root/secretary-bot
+git fetch origin
+git switch --track origin/feature/minimal-mini-app   # later: git pull --ff-only
+docker compose up -d --build
+```
+
+Roll back to `main` (safe at any time, nothing to undo in the database):
+
+```bash
+cd /root/secretary-bot
+git switch main
+git pull --ff-only
+docker compose up -d --build
+```
+
+Run the health checks and verify the webhook after either step. Telegram may
+keep the old assets for a moment; the page references versioned asset URLs,
+so reopening the Mini App picks up the switch.
+
 ## Backup and transfer snapshot
 
 The initial VPS deployment was restored from the encrypted full-transfer package:
