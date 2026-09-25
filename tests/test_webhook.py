@@ -255,7 +255,7 @@ def test_settings_app_and_assets_are_served_without_exposing_secrets(world) -> N
 
     assert page.status_code == stylesheet.status_code == script.status_code == 200
     assert "Personal Secretary" in page.text
-    for tab in ("Головна", "Контакти", "Відповіді", "Ще"):
+    for tab in ("Головна", "Контакти", "Шаблони", "Ще"):
         assert f"<span>{tab}</span>" in page.text
     assert 'data-mode="live"' in page.text
     assert 'name="bot_delay_seconds"' in page.text and 'name="delay_min_seconds"' in page.text

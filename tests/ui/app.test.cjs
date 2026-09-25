@@ -292,15 +292,6 @@ test('R2: abandoned notifications are shown with a retry action',async t=>{
   assert.equal(w.document.querySelector('#retry-notifications'),null);
 });
 
-test('home screen counts new contacts and opens them',async t=>{
-  const w=await screen(t,{handler:path=>path.startsWith('/api/v1/contacts')?response({items:[{...contact(1),configured:false},{...contact(2),configured:false},contact(3)],has_more:false}):null});
-  await tick();
-  const row=w.document.querySelector('#attention [data-view=contacts]');
-  assert.match(row.textContent,/Нові контакти\s*2/);
-  row.click(); await tick();
-  assert.equal(w.document.querySelector('[data-view-panel=contacts]').classList.contains('active'),true);
-});
-
 test('R3: rule preview says it ignores unsaved contact edits and names the template',async t=>{
   let previewBody;
   const w=await screen(t,{handler:(path,options)=>{
@@ -635,57 +626,12 @@ test('a deep link to a page returns to "Ще", and the log page shows diagnostic
   assert.match(d.querySelector('#attention').textContent,/Підсумок не надіслано/);
 });
 
-test('a new contact keeps its save bar, and saving it updates the home count',async t=>{
-  let configured=false;
-  const w=await screen(t,{handler:(path,options)=>{
-    if(path==='/api/v1/contacts/101'){configured=true;return response({...contact(101),...JSON.parse(options.body)});}
-    if(path.startsWith('/api/v1/contacts'))return response({items:[{...contact(101),configured}],has_more:false});
-  }});
-  const d=w.document; await tick();
-  assert.match(d.querySelector('#attention').textContent,/Нові контакти\s*1/);
-  d.querySelector('#navigation [data-view=contacts]').click(); await tick();
-  d.querySelector('[data-contact-id="101"]').click();
-  const form=d.querySelector('#contact-form');
-  assert.equal(form.classList.contains('needs-save'),true);
-  form.requestSubmit(); await tick(); await tick(); await tick();
-  assert.equal(form.classList.contains('needs-save'),false);
-  assert.equal(d.querySelector('#attention').classList.contains('hidden'),true);
-});
-
 test('connecting a channel by link does not leave the summary form unsaved',async t=>{
   const w=await screen(t);
   const form=w.document.querySelector('#summary-form');
   const field=w.document.querySelector('#summary-channel-reference');
   field.value='https://t.me/c/1/2'; field.dispatchEvent(new w.Event('input',{bubbles:true}));
   assert.notEqual(form.dataset.dirty,'true');
-});
-
-test('a link from the home screen to a tab offers Back to the home screen',async t=>{
-  const w=await screen(t,{handler:path=>path.startsWith('/api/v1/contacts')?response({items:[{...contact(1),configured:false}],has_more:false}):null});
-  const d=w.document; await tick();
-  d.querySelector('#attention [data-view=contacts]').click(); await tick();
-  assert.equal(d.querySelector('[data-view-panel=contacts]').classList.contains('active'),true);
-  assert.equal(d.querySelector('#back-button').classList.contains('hidden'),false);
-  d.querySelector('[data-contact-id="1"]').click();
-  d.querySelector('#back-button').click();
-  assert.equal(d.querySelector('[data-view-panel=contacts]').classList.contains('active'),true,'first Back closes the contact');
-  d.querySelector('#back-button').click();
-  assert.equal(d.querySelector('[data-view-panel=overview]').classList.contains('active'),true);
-  assert.equal(d.querySelector('#back-button').classList.contains('hidden'),true);
-  d.querySelector('#attention [data-view=contacts]').click(); await tick();
-  d.querySelector('#navigation [data-view=contacts]').click(); await tick();
-  assert.equal(d.querySelector('#back-button').classList.contains('hidden'),true,'a tab tap starts over');
-});
-
-test('"Нові контакти" opens the list even if a contact was left open',async t=>{
-  const w=await screen(t,{handler:path=>path.startsWith('/api/v1/contacts')?response({items:[{...contact(1),configured:false},contact(2)],has_more:false}):null});
-  const d=w.document; await tick();
-  d.querySelector('#navigation [data-view=contacts]').click(); await tick();
-  d.querySelector('[data-contact-id="2"]').click();
-  d.querySelector('#navigation [data-view=overview]').click(); await tick();
-  d.querySelector('#attention [data-view=contacts]').click(); await tick();
-  assert.equal(d.querySelector('#contact-layout').classList.contains('editing'),false);
-  assert.equal(d.querySelector('#page-title').textContent,'Контакти');
 });
 
 test('undoing a change leaves nothing to save and the AI rules untouched',async t=>{
@@ -763,4 +709,144 @@ test('adding a type keeps the other cards as they are',async t=>{
   assert.equal(doc.querySelector('[data-code="money"]'),money,'the card is not re-rendered');
   assert.equal(money.querySelector('.direction-more').open,true);
   assert.equal(keywords.value,'a,b');
+});
+
+function statsScreen(t,{stats={new:1,active:3,paused:0,never:2},items=[{...contact(1),configured:false},contact(2)],onSave}={}){
+  return screen(t,{handler:(path,options)=>{
+    if(path==='/api/v1/contacts/stats')return response(typeof stats==='function'?stats():stats);
+    if(onSave&&options?.method==='PUT'&&path.startsWith('/api/v1/contacts/'))return onSave(path,options);
+    if(path.startsWith('/api/v1/contacts'))return response({items,has_more:false});
+  }});
+}
+
+test('home shows only the contact groups that have someone in them',async t=>{
+  const w=await statsScreen(t); const d=w.document; await tick();
+  const block=d.querySelector('#contact-stats');
+  assert.equal(block.classList.contains('hidden'),false);
+  const cells=[...block.querySelectorAll('.stat')].map(cell=>cell.textContent);
+  assert.deepEqual(cells,['1Нові','3Активні','2Без відповіді']);
+  assert.equal(block.querySelector('.stat').classList.contains('warn'),true);
+});
+
+test('home hides the contact block when there are no contacts',async t=>{
+  const w=await statsScreen(t,{stats:{new:0,active:0,paused:0,never:0},items:[]}); await tick();
+  assert.equal(w.document.querySelector('#contact-stats').classList.contains('hidden'),true);
+});
+
+test('a link from the home screen to a tab offers Back to the home screen',async t=>{
+  const w=await statsScreen(t); const d=w.document; await tick();
+  d.querySelector('#contact-stats .stat').click(); await tick();
+  assert.equal(d.querySelector('[data-view-panel=contacts]').classList.contains('active'),true);
+  assert.equal(d.querySelector('#back-button').classList.contains('hidden'),false);
+  d.querySelector('[data-contact-id="1"]').click();
+  d.querySelector('#back-button').click();
+  assert.equal(d.querySelector('[data-view-panel=contacts]').classList.contains('active'),true,'first Back closes the contact');
+  d.querySelector('#back-button').click();
+  assert.equal(d.querySelector('[data-view-panel=overview]').classList.contains('active'),true);
+  assert.equal(d.querySelector('#back-button').classList.contains('hidden'),true);
+  d.querySelector('#contact-stats .stat').click(); await tick();
+  d.querySelector('#navigation [data-view=contacts]').click(); await tick();
+  assert.equal(d.querySelector('#back-button').classList.contains('hidden'),true,'a tab tap starts over');
+});
+
+test('the contact block opens the list even if a contact was left open',async t=>{
+  const w=await statsScreen(t); const d=w.document; await tick();
+  d.querySelector('#navigation [data-view=contacts]').click(); await tick();
+  d.querySelector('[data-contact-id="2"]').click();
+  d.querySelector('#navigation [data-view=overview]').click(); await tick();
+  d.querySelector('#contact-stats .stat').click(); await tick();
+  assert.equal(d.querySelector('#contact-layout').classList.contains('editing'),false);
+  assert.equal(d.querySelector('#page-title').textContent,'Контакти');
+});
+
+test('saving a new contact refreshes the home counts',async t=>{
+  let saved=false;
+  const w=await statsScreen(t,{stats:()=>saved?{new:0,active:1,paused:0,never:0}:{new:1,active:0,paused:0,never:0},items:[{...contact(101),configured:false}],
+    onSave:(path,options)=>{saved=true;return response({...contact(101),...JSON.parse(options.body)});}});
+  const d=w.document; await tick();
+  assert.match(d.querySelector('#contact-stats').textContent,/1Нові/);
+  d.querySelector('#navigation [data-view=contacts]').click(); await tick();
+  d.querySelector('[data-contact-id="101"]').click();
+  const form=d.querySelector('#contact-form');
+  assert.equal(form.classList.contains('needs-save'),true);
+  form.requestSubmit(); await tick(); await tick(); await tick();
+  assert.equal(form.classList.contains('needs-save'),false);
+  assert.equal(d.querySelector('#contact-stats').textContent,'1Активні');
+});
+
+test('"Цілодобово" in an interval hides the hours and saves the whole day',async t=>{
+  let saved;
+  const w=await screen(t,{handler:(path,options)=>{ if(path==='/api/v1/schedule'){saved=JSON.parse(options.body);return response(saved);} }});
+  const d=w.document; const form=d.querySelector('#schedule-form');
+  const row=form.querySelector('.window-row'); const allDay=row.querySelector('.all-day-toggle');
+  assert.equal(allDay.checked,false);
+  allDay.checked=true; allDay.dispatchEvent(new w.Event('change',{bubbles:true}));
+  assert.equal(row.classList.contains('is-all-day'),true);
+  assert.equal(form.dataset.dirty,'true');
+  allDay.checked=false; allDay.dispatchEvent(new w.Event('change',{bubbles:true}));
+  assert.equal(row.querySelector('.time-from').value,'22:00','unticking brings the hours back');
+  assert.equal(form.dataset.dirty,'false');
+  allDay.checked=true; allDay.dispatchEvent(new w.Event('change',{bubbles:true}));
+  form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true})); await tick(); await tick();
+  assert.deepEqual([saved.windows[0].time_from,saved.windows[0].time_to],['00:00','00:00']);
+  assert.match(d.querySelector('#home-schedule').textContent,/^цілодобово, щодня$/);
+});
+
+test('a contact can be answered around the clock in one tap',async t=>{
+  let saved;
+  const w=await screen(t,{handler:(path,options)=>{
+    if(path==='/api/v1/contacts/100'){saved=JSON.parse(options.body);return response({...contact(100),...saved});}
+    if(path.startsWith('/api/v1/contacts'))return response({items:[contact(100)],has_more:false});
+  }});
+  const d=w.document;
+  d.querySelector('#navigation [data-view=contacts]').click(); await tick();
+  d.querySelector('[data-contact-id="100"]').click();
+  d.querySelector('#contact-all-day').click();
+  assert.equal(d.querySelector('#contact-all-day').classList.contains('hidden'),true);
+  assert.equal(d.querySelector('#contact-windows .all-day-toggle').checked,true);
+  d.querySelector('#contact-form').requestSubmit(); await tick(); await tick();
+  assert.deepEqual(saved.windows,[{weekday_mask:127,time_from:'00:00',time_to:'00:00',is_active:true}]);
+});
+
+test('the replies section is named for templates and hides the model',async t=>{
+  const w=await screen(t,{url:'https://testserver/app/#classifier'});
+  const d=w.document;
+  assert.equal(d.querySelector('#page-title').textContent,'Шаблони відповідей');
+  assert.equal(d.querySelector('#navigation [data-view=classifier]').textContent.trim(),'Шаблони');
+  assert.equal(d.querySelector('#add-direction').textContent,'+ Тип відповіді');
+  const model=d.querySelector('#classifier-form').elements.model;
+  assert.equal(model.type,'hidden');
+  assert.equal(model.value,base.classifier.model);
+});
+
+test('a 24/7 schedule does not claim to end at midnight',async t=>{
+  const data=structuredClone(base); data.connection.dry_run=false;
+  data.schedule.windows=[{id:1,weekday_mask:127,time_from:'00:00',time_to:'00:00',is_active:true}];
+  data.status={...data.status,code:'live',window_end:'2026-09-25T21:00:00Z'}; // 00:00 in Kyiv
+  const w=await screen(t,{data});
+  assert.equal(w.document.querySelector('#operating-note').textContent,'Цілодобово');
+  assert.equal(w.document.querySelector('#home-schedule').textContent,'цілодобово, щодня');
+});
+
+test('consecutive whole days end at the last of them',async t=>{
+  const data=structuredClone(base); data.connection.dry_run=false;
+  // Saturday and Sunday are whole days; Saturday 2026-09-26 starts at 21:00 UTC on Friday.
+  data.schedule.windows=[{id:1,weekday_mask:96,time_from:'00:00',time_to:'00:00',is_active:true}];
+  data.status={...data.status,code:'live',window_end:'2026-09-25T21:00:00Z'};
+  const w=await screen(t,{data});
+  assert.equal(w.document.querySelector('#operating-note').textContent,'До кінця 27 вересня');
+});
+
+test('a contact that is never answered hides its schedule, and 24/7 needs no shortcut',async t=>{
+  const data=structuredClone(base);
+  data.schedule.windows=[{id:1,weekday_mask:127,time_from:'00:00',time_to:'00:00',is_active:true}];
+  const w=await screen(t,{data,handler:path=>path.startsWith('/api/v1/contacts')&&!path.includes('stats')?response({items:[contact(100)],has_more:false}):null});
+  const d=w.document;
+  d.querySelector('#navigation [data-view=contacts]').click(); await tick();
+  d.querySelector('[data-contact-id="100"]').click();
+  assert.equal(d.querySelector('#contact-all-day').classList.contains('hidden'),true);
+  assert.match(d.querySelector('#contact-schedule-preview').textContent,/Цілодобово/);
+  const form=d.querySelector('#contact-form');
+  form.elements.exclusion.value='forever'; form.elements.exclusion[2].dispatchEvent(new w.Event('change',{bubbles:true}));
+  assert.equal(form.querySelector('.contact-schedule').classList.contains('hidden'),true);
 });

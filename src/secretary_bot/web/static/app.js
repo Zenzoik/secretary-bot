@@ -10,7 +10,7 @@
   let configuredTelegram = null;
   const state = { bootstrap: null, contacts: [], logContacts: [], selectedContact: null, analytics: null, activeView: "overview", trail: [] };
   const titles = {
-    overview: "Головна", contacts: "Контакти", classifier: "Відповіді", more: "Ще",
+    overview: "Головна", contacts: "Контакти", classifier: "Шаблони відповідей", more: "Ще",
     schedule: "Розклад", delivery: "Доставка", summary: "Щоденний підсумок", escalation: "Платні звернення",
     analytics: "Аналітика", logs: "Історія дій", check: "Перевірити відповідь", users: "Користувачі",
   };
@@ -196,6 +196,7 @@
       state.bootstrap.connection = fresh.connection;
       state.bootstrap.status = fresh.status;
       renderStatus();
+      if (state.activeView === "overview") loadContactStats();
     } catch (error) { toast(error.status === 401 ? "Сеанс завершено. Відкрийте панель через бота." : "Не вдалося оновити стан. Спробуйте ще раз.", true); }
   }
 
@@ -228,6 +229,7 @@
     // A kept scroll offset would open the next view halfway down.
     window.scrollTo({ top: 0 });
     renderBackButton();
+    if (view === "overview") loadContactStats();
     if (view === "contacts") loadContacts();
     if (view === "analytics") loadAnalytics();
     if (view === "logs") { renderDiagnostics(); loadLogs(); }
@@ -285,6 +287,26 @@
     return day(new Date(value)) === day(new Date()) ? `о ${localTime(value)}` : formatDate(value);
   }
 
+  // A whole-day window ends at midnight, but the next day may be one too: count
+  // the whole days that follow, so a 24/7 schedule does not claim to end tonight.
+  function windowEndNote(value) {
+    const zone = state.bootstrap?.schedule?.timezone || undefined;
+    const end = new Date(value);
+    const clock = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: zone }).format(end);
+    const wholeDays = (state.bootstrap?.schedule?.windows || []).filter((window) => window.is_active && isWholeDay(window))
+      .reduce((mask, window) => mask | window.weekday_mask, 0);
+    if (clock !== "00:00" || !wholeDays) return `До ${localTime(value)}`;
+    const weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    let day = weekdays.indexOf(new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: zone }).format(end));
+    let covered = 0;
+    while (covered < 7 && wholeDays & (1 << day)) { covered += 1; day = (day + 1) % 7; }
+    if (covered >= 7) return "Цілодобово";
+    if (!covered) return `До ${localTime(value)}`;
+    // Midday of the last covered day, so a DST shift cannot move it to another date.
+    const last = new Date(end.getTime() + (covered - 0.5) * 86400000);
+    return `До кінця ${new Intl.DateTimeFormat("uk-UA", { day: "numeric", month: "long", timeZone: zone }).format(last)}`;
+  }
+
   function currentMode(connection) {
     if (connection.kill_switch) return "off";
     return connection.dry_run ? "test" : "live";
@@ -294,7 +316,8 @@
     const active = (windows || []).filter((window) => window.is_active);
     if (!active.length) return "Не налаштовано";
     const [first] = active;
-    const text = `${first.time_from.slice(0, 5)}–${first.time_to.slice(0, 5)}, ${(weekdayLabels[first.weekday_mask] || "обрані дні").toLowerCase()}`;
+    const hours = isWholeDay(first) ? "цілодобово" : `${first.time_from.slice(0, 5)}–${first.time_to.slice(0, 5)}`;
+    const text = `${hours}, ${(weekdayLabels[first.weekday_mask] || "обрані дні").toLowerCase()}`;
     return active.length > 1 ? `${text} +${active.length - 1}` : text;
   }
 
@@ -309,8 +332,8 @@
       stopped: ["Вимкнено", "Клієнти не отримують відповідей"],
       paused: [`Пауза до ${current.muted_until ? localTime(current.muted_until) : "—"}`, ""],
       outside_schedule: ["Чекає розкладу", current.next_start ? `Почне ${startsAt(current.next_start)}` : ""],
-      dry_run: ["Тестовий режим", current.window_end ? `До ${localTime(current.window_end)}` : ""],
-      live: ["Відповідає клієнтам", current.window_end ? `До ${localTime(current.window_end)}` : ""],
+      dry_run: ["Тестовий режим", current.window_end ? windowEndNote(current.window_end) : ""],
+      live: ["Відповідає клієнтам", current.window_end ? windowEndNote(current.window_end) : ""],
     }[current.code] || [current.label || "Перевіряємо стан", ""];
     $("#operating-title").textContent = title;
     $("#operating-note").textContent = note;
@@ -340,7 +363,6 @@
     const rights = state.bootstrap.connection.rights || {};
     const items = [];
     if (!rights.can_reply) items.push('<div class="list-row warn"><span>Немає права відповідати</span><small>Chat Automation</small></div>');
-    if (state.newContacts) items.push(`<button class="list-row warn" type="button" data-view="contacts" data-contact-list><span>Нові контакти</span><small>${state.newContacts}${state.newContactsMore ? "+" : ""}</small></button>`);
     if (current.failed_notifications > 0) items.push(`<div class="list-row warn"><span>Сповіщення не доставлено</span><small>${current.failed_notifications}</small><button class="chip-button" id="retry-notifications" type="button">Повторити</button></div>`);
     if (current.summary_status === "error") items.push('<button class="list-row warn" type="button" data-view="summary"><span>Підсумок не надіслано</span></button>');
     if (current.uncertain_deliveries > 0) items.push(`<div class="list-row warn"><span>Перевірте надсилання в чатах</span><small>${current.uncertain_deliveries}</small></div>`);
@@ -362,14 +384,23 @@
     ].map(([label, value]) => `<div><span>${label}</span><b>${escapeHtml(value)}</b></div>`).join("");
   }
 
-  async function countNewContacts() {
+  async function loadContactStats() {
+    // The home screen stays usable without the counts.
     try {
-      const result = await api("/api/v1/contacts?search=&offset=0");
-      const items = Array.isArray(result?.items) ? result.items : [];
-      state.newContacts = items.filter((contact) => !contact.configured).length;
-      state.newContactsMore = Boolean(result.has_more) && state.newContacts === items.length;
-      renderAttention();
-    } catch { /* The home screen stays usable without the count. */ }
+      state.contactStats = await api("/api/v1/contacts/stats");
+      renderContactStats();
+    } catch { /* keep the last known counts */ }
+  }
+
+  // Only the groups that have someone in them; new contacts need the owner.
+  function renderContactStats() {
+    const stats = state.contactStats || {};
+    const cells = [
+      ["new", "Нові"], ["active", "Активні"], ["paused", "На паузі"], ["never", "Без відповіді"],
+    ].filter(([key]) => Number(stats[key]) > 0);
+    const block = $("#contact-stats");
+    block.innerHTML = cells.map(([key, label]) => `<button type="button" class="stat ${key === "new" ? "warn" : ""}" data-view="contacts" data-contact-list><strong>${Number(stats[key])}</strong><small>${label}</small></button>`).join("");
+    block.classList.toggle("hidden", !cells.length);
   }
 
   function fillDelivery() {
@@ -420,12 +451,32 @@
     form.elements.delay_min_seconds.disabled = bot;
   }
 
+  // 00:00–00:00 is the server's explicit "whole day".
+  const WHOLE_DAY = "00:00";
+  const isWholeDay = (window) => window.time_from.slice(0, 5) === WHOLE_DAY && window.time_to.slice(0, 5) === WHOLE_DAY;
+
   function createWindow(container, data = { weekday_mask: 127, time_from: "22:00", time_to: "08:00", is_active: true }) {
     const node = $("#window-template").content.firstElementChild.cloneNode(true);
     $(".weekday-mask", node).value = String(data.weekday_mask);
     $(".time-from", node).value = data.time_from.slice(0, 5);
     $(".time-to", node).value = data.time_to.slice(0, 5);
     $(".is-active", node).checked = data.is_active;
+    const allDay = $(".all-day-toggle", node);
+    allDay.checked = isWholeDay(data);
+    node.classList.toggle("is-all-day", allDay.checked);
+    allDay.addEventListener("change", () => {
+      const from = $(".time-from", node), to = $(".time-to", node);
+      if (allDay.checked) {
+        // Remember the hours, so unticking brings them back unchanged.
+        node.dataset.hours = `${from.value}-${to.value}`;
+        from.value = WHOLE_DAY; to.value = WHOLE_DAY;
+      } else {
+        const [previousFrom, previousTo] = (node.dataset.hours || "").split("-");
+        const restore = previousFrom && !(previousFrom === WHOLE_DAY && previousTo === WHOLE_DAY);
+        from.value = restore ? previousFrom : "22:00"; to.value = restore ? previousTo : "08:00";
+      }
+      node.classList.toggle("is-all-day", allDay.checked);
+    });
     $(".remove-window", node).addEventListener("click", () => {
       if (!window.confirm("Видалити цей інтервал? Зміна набуде чинності після збереження.")) return;
       node.remove();
@@ -448,12 +499,14 @@
     $("#add-contact-window").textContent = hasPersonalSchedule ? "+ Інтервал" : "Змінити";
     $("#add-contact-window").classList.toggle("edit-icon", !hasPersonalSchedule);
     $("#reset-contact-windows").classList.toggle("hidden", !hasPersonalSchedule);
+    const mainAlwaysOn = inheritedWindows.some((window) => window.is_active && window.weekday_mask === 127 && isWholeDay(window));
+    $("#contact-all-day").classList.toggle("hidden", hasPersonalSchedule || mainAlwaysOn);
     container.classList.toggle("hidden", !hasPersonalSchedule);
     const preview = $("#contact-schedule-preview");
     preview.classList.toggle("hidden", hasPersonalSchedule);
     const activeInheritedWindows = inheritedWindows.filter((window) => window.is_active);
     preview.innerHTML = activeInheritedWindows.length
-      ? activeInheritedWindows.map((window) => `<div><span>${escapeHtml(weekdayLabels[window.weekday_mask] || "Обрані дні")}</span><b>${escapeHtml(window.time_from.slice(0, 5))}–${escapeHtml(window.time_to.slice(0, 5))}</b></div>`).join("")
+      ? activeInheritedWindows.map((window) => `<div><span>${escapeHtml(weekdayLabels[window.weekday_mask] || "Обрані дні")}</span><b>${isWholeDay(window) ? "Цілодобово" : `${escapeHtml(window.time_from.slice(0, 5))}–${escapeHtml(window.time_to.slice(0, 5))}`}</b></div>`).join("")
       : '<div><span>Основний розклад не налаштовано</span></div>';
   }
 
@@ -723,6 +776,8 @@
   function renderExclusionUntil() {
     const form = $("#contact-form");
     $(".exclusion-until", form).classList.toggle("hidden", form.elements.exclusion.value !== "until");
+    // A contact that is never answered has no use for a schedule.
+    $(".contact-schedule", form).classList.toggle("hidden", form.elements.exclusion.value === "forever");
   }
 
   async function loadLogs(append = false) {
@@ -1002,6 +1057,14 @@
       renderContactScheduleEditor();
       refreshDirty($("#contact-form"));
     });
+    // A one-tap personal schedule: this contact is answered around the clock.
+    $("#contact-all-day").addEventListener("click", () => {
+      const container = $("#contact-windows");
+      container.innerHTML = "";
+      createWindow(container, { weekday_mask: 127, time_from: WHOLE_DAY, time_to: WHOLE_DAY, is_active: true });
+      renderContactScheduleEditor();
+      refreshDirty($("#contact-form"));
+    });
     $("#reset-contact-windows").addEventListener("click", () => {
       if (!window.confirm("Повернути основний розклад? Зміна набуде чинності після збереження.")) return;
       $("#contact-windows").innerHTML = "";
@@ -1019,7 +1082,7 @@
       renderContacts();
       fillContactForm(saved);
       renderBackButton();
-      countNewContacts();
+      loadContactStats();
     }); });
     $("#add-direction").addEventListener("click", () => {
       if ($$(".direction-card").length >= 30) { toast("Можна додати до 30 типів"); return; }
@@ -1176,7 +1239,6 @@
     // Reply templates now live on the request types; keep old #templates links working.
     const requested = location.hash.slice(1) === "templates" ? "classifier" : location.hash.slice(1);
     navigate(titles[requested] ? requested : "overview");
-    countNewContacts();
     $("#app").setAttribute("aria-busy", "false");
   }
 

@@ -9,10 +9,10 @@
     <meta property="og:description" content="Налаштування без зайвих кроків">
     <meta property="og:image" content="{{BASE_URL}}/assets/og.png">
     <title>Personal Secretary — налаштування</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260925-minimal3">
+    <link rel="stylesheet" href="/assets/styles.css?v=20260926-minimal4">
     <script id="telegram-web-app-sdk" src="https://telegram.org/js/telegram-web-app.js?59" async></script>
     <script src="/assets/ui-utils.js?v=20260907-sdk-fallback1" defer></script>
-    <script src="/assets/app.js?v=20260925-minimal3" defer></script>
+    <script src="/assets/app.js?v=20260926-minimal4" defer></script>
   </head>
   <body>
     <div class="app-shell" id="app" aria-busy="true">
@@ -20,7 +20,7 @@
         <span class="brand" aria-hidden="true"><span class="brand-mark">PS</span>Personal Secretary</span>
         <button data-view="overview" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11.5 12 5l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5h-5v5H5a1 1 0 0 1-1-1z"/></svg><span>Головна</span></button>
         <button data-view="contacts" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.5" r="3.5"/><path d="M5 19.5c.8-3.3 3.6-5 7-5s6.2 1.7 7 5"/></svg><span>Контакти</span></button>
-        <button data-view="classifier" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14a1 1 0 0 1 1 1V15a1 1 0 0 1-1 1h-8l-4.5 3.5V16H5a1 1 0 0 1-1-1V6.5a1 1 0 0 1 1-1z"/></svg><span>Відповіді</span></button>
+        <button data-view="classifier" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14a1 1 0 0 1 1 1V15a1 1 0 0 1-1 1h-8l-4.5 3.5V16H5a1 1 0 0 1-1-1V6.5a1 1 0 0 1 1-1z"/></svg><span>Шаблони</span></button>
         <button data-view="more" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18" cy="12" r="1.3"/></svg><span>Ще</span></button>
       </nav>
 
@@ -60,6 +60,7 @@
               <button class="chip-button" id="pause-toggle" type="button"></button>
             </section>
             <section class="list hidden" id="attention" aria-label="Потребує уваги"></section>
+            <section class="card contact-stats hidden" id="contact-stats" aria-label="Контакти"></section>
             <section class="list">
               <button class="list-row" data-view="schedule" type="button"><span>Розклад</span><small id="home-schedule"></small></button>
             </section>
@@ -90,6 +91,7 @@
                     <div class="contact-schedule-heading">
                       <div><span class="field-label">Розклад</span><small id="contact-schedule-source"></small></div>
                       <div class="contact-schedule-actions">
+                        <button class="chip-button" id="contact-all-day" type="button">Цілодобово</button>
                         <button class="chip-button hidden" id="reset-contact-windows" type="button">Як основний</button>
                         <button class="chip-button accent edit-icon" id="add-contact-window" type="button">Змінити</button>
                       </div>
@@ -106,14 +108,13 @@
           <section class="view" data-view-panel="classifier">
             <form id="classifier-form">
               <div class="direction-list" id="direction-list"></div>
-              <button class="chip-button add-button" type="button" id="add-direction">+ Тип звернення</button>
+              <button class="chip-button add-button" type="button" id="add-direction">+ Тип відповіді</button>
               <details class="advanced">
                 <summary>Розширені</summary>
                 <label>Інструкція для ШІ<textarea name="system_prompt" rows="10" maxlength="8000" required></textarea><small>Оновлюється автоматично, коли змінюються типи.</small></label>
-                <div class="form-grid two">
-                  <label>Модель<input name="model" maxlength="100" required></label>
-                  <label>Поріг упевненості<input name="confidence_min" type="number" min="0" max="1" step="0.01" required></label>
-                </div>
+                <!-- The model is chosen on the server; the form only carries it back. -->
+                <input name="model" type="hidden">
+                <label class="field-compact">Поріг упевненості<input name="confidence_min" type="number" min="0" max="1" step="0.01" required></label>
               </details>
               <div class="form-actions"><button class="primary" id="save-classifier" type="submit">Зберегти</button></div>
             </form>
@@ -271,8 +272,9 @@
     <template id="window-template">
       <div class="window-row">
         <label>Дні<select class="weekday-mask"><option value="127">Щодня</option><option value="31">Будні</option><option value="96">Вихідні</option><option value="1">Понеділок</option><option value="2">Вівторок</option><option value="4">Середа</option><option value="8">Четвер</option><option value="16">П’ятниця</option><option value="32">Субота</option><option value="64">Неділя</option></select></label>
-        <label>Від<input class="time-from" type="time" required></label>
-        <label>До<input class="time-to" type="time" required></label>
+        <label class="window-time">Від<input class="time-from" type="time" required></label>
+        <label class="window-time">До<input class="time-to" type="time" required></label>
+        <label class="all-day"><input class="all-day-toggle" type="checkbox"><span>Цілодобово</span></label>
         <label class="tiny-switch" title="Активне вікно"><input class="is-active" type="checkbox" role="switch" aria-label="Активне" checked></label>
         <button class="icon-button remove-window" type="button" aria-label="Видалити інтервал">×</button>
       </div>
