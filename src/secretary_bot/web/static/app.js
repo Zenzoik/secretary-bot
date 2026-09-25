@@ -8,12 +8,14 @@
   const launchInitData = new URLSearchParams(location.hash.slice(1)).get("tgWebAppData") || "";
   let tg = window.Telegram?.WebApp;
   let configuredTelegram = null;
-  const state = { bootstrap: null, contacts: [], logContacts: [], selectedContact: null, analytics: null, activeView: "overview" };
+  const state = { bootstrap: null, contacts: [], logContacts: [], selectedContact: null, analytics: null, activeView: "overview", returnTo: "more" };
   const titles = {
-    overview: "Огляд", schedule: "Розклад", contacts: "Контакти",
-    classifier: "Типи звернень", summary: "Підсумки",
-    analytics: "Аналітика", logs: "Історія дій", users: "Користувачі",
+    overview: "Головна", contacts: "Контакти", classifier: "Відповіді", more: "Ще",
+    schedule: "Розклад", delivery: "Доставка", summary: "Щоденний підсумок", escalation: "Платні звернення",
+    analytics: "Аналітика", logs: "Історія дій", check: "Перевірити відповідь", users: "Користувачі",
   };
+  // The four tabs; every other view is a page opened from one of them.
+  const tabs = ["overview", "contacts", "classifier", "more"];
   const actions = ["replied", "dry_run", "skipped_schedule", "skipped_excluded", "skipped_unconfigured", "skipped_owner_replied", "skipped_window_limit", "skipped_kill_switch", "skipped_inactive", "skipped_unsupported_content", "error"];
   const actionLabels = {
     replied: "Відповів", dry_run: "Прев’ю", skipped_schedule: "Поза розкладом",
@@ -39,6 +41,8 @@
       tg.setHeaderColor?.("bg_color");
       tg.setBackgroundColor?.(tg.themeParams?.bg_color || "#0d141f");
       tg.onEvent?.("themeChanged", applyTheme);
+      tg.BackButton?.onClick?.(() => goBack());
+      if (state.bootstrap) renderBackButton();
     }
     applyTheme();
   }
@@ -149,7 +153,7 @@
     badge.textContent = dirty ? "Є незбережені зміни" : "";
     let reset = $(".discard-changes", form);
     if (!reset && form.id !== "preview-form") {
-      reset = document.createElement("button"); reset.type = "button"; reset.className = "secondary discard-changes"; reset.textContent = "Скасувати зміни";
+      reset = document.createElement("button"); reset.type = "button"; reset.className = "secondary discard-changes"; reset.textContent = "Скасувати";
       reset.addEventListener("click", () => {
         if (!window.confirm("Відкинути незбережені зміни цієї форми?")) return;
         setDirty(form, false);
@@ -189,19 +193,46 @@
 
   function navigate(view) {
     if (!titles[view]) return;
+    // A deep link straight to a page has no tab behind it; "Ще" is its home.
+    if (tabs.includes(state.activeView) && state.navigated) state.returnTo = state.activeView;
+    state.navigated = true;
     state.activeView = view;
-    $$("[data-view]").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
+    const tab = tabs.includes(view) ? view : state.returnTo;
+    $$("#navigation [data-view]").forEach((button) => button.classList.toggle("active", button.dataset.view === tab));
     $$("[data-view-panel]").forEach((panel) => panel.classList.toggle("active", panel.dataset.viewPanel === view));
     $("#page-title").textContent = titles[view];
     history.replaceState(null, "", `#${view}`);
-    $(`[data-view="${view}"]`)?.scrollIntoView({ block: "nearest", inline: "center" });
-    // The mobile navigation is pinned to the top, so a kept scroll offset would
-    // open the next view with its heading already hidden underneath the tabs.
+    // A kept scroll offset would open the next view halfway down.
     window.scrollTo({ top: 0 });
+    renderBackButton();
     if (view === "contacts") loadContacts();
     if (view === "analytics") loadAnalytics();
-    if (view === "logs") loadLogs();
+    if (view === "logs") { renderDiagnostics(); loadLogs(); }
     if (view === "users") loadUsers();
+    if (view === "check") { state.previewContact = state.selectedContact; renderPreviewScope(); }
+  }
+
+  // On wide screens the contact list and the open card sit side by side.
+  const wideLayout = () => Boolean(window.matchMedia?.("(min-width: 900px)").matches);
+
+  function contactOpenAlone() {
+    return state.activeView === "contacts" && Boolean(state.selectedContact) && !wideLayout();
+  }
+
+  function canGoBack() {
+    return !tabs.includes(state.activeView) || contactOpenAlone();
+  }
+
+  function renderBackButton() {
+    const visible = canGoBack();
+    $("#back-button").classList.toggle("hidden", !visible);
+    if (state.activeView === "contacts") $("#page-title").textContent = contactOpenAlone() ? contactName(state.selectedContact) : titles.contacts;
+    if (visible) tg?.BackButton?.show?.(); else tg?.BackButton?.hide?.();
+  }
+
+  function goBack() {
+    if (contactOpenAlone()) { closeContact(); return; }
+    if (!tabs.includes(state.activeView)) navigate(state.returnTo);
   }
 
   async function loadUsers() {
@@ -220,26 +251,101 @@
     } catch (error) { container.textContent = error.message; toast(error.message, true); }
   }
 
+  function localTime(value) {
+    return new Intl.DateTimeFormat("uk-UA", { hour: "2-digit", minute: "2-digit", timeZone: state.bootstrap?.schedule?.timezone || undefined }).format(new Date(value));
+  }
+
+  function startsAt(value) {
+    const zone = state.bootstrap?.schedule?.timezone || undefined;
+    const day = (date) => new Intl.DateTimeFormat("uk-UA", { dateStyle: "short", timeZone: zone }).format(date);
+    return day(new Date(value)) === day(new Date()) ? `о ${localTime(value)}` : formatDate(value);
+  }
+
+  function currentMode(connection) {
+    if (connection.kill_switch) return "off";
+    return connection.dry_run ? "test" : "live";
+  }
+
+  function scheduleSummary(windows) {
+    const active = (windows || []).filter((window) => window.is_active);
+    if (!active.length) return "Не налаштовано";
+    const [first] = active;
+    const text = `${first.time_from.slice(0, 5)}–${first.time_to.slice(0, 5)}, ${(weekdayLabels[first.weekday_mask] || "обрані дні").toLowerCase()}`;
+    return active.length > 1 ? `${text} +${active.length - 1}` : text;
+  }
+
   function renderStatus() {
     const { connection, delivery } = state.bootstrap;
-    const current = state.bootstrap.status;
-    const live = current?.code === "live";
-    const statusLabel = current?.label || "Перевіряємо стан";
-    $("#operating-title").textContent = statusLabel;
-    $("#operating-note").textContent = [current?.muted_until && current.code === "paused" ? `До ${formatDate(current.muted_until)}` : "", current?.next_start ? `Наступне вікно: ${formatDate(current.next_start)}` : "", current?.note || "", `Часовий пояс розкладу: ${current?.timezone || "—"}`].filter(Boolean).join(" · ");
-    $("#operating-history").textContent = `Остання відповідь: ${formatDate(current?.last_reply_at)} · Остання помилка: ${errorLabels[current?.last_error] || current?.last_error || "немає"} · Підсумок: ${{none:"ще не сформовано",pending:"готується",delivered:"надіслано",error:"помилка"}[current?.summary_status] || "—"} · Очікують повідомлення: ${current?.pending_notifications || 0} · Недоставлені сповіщення: ${current?.failed_notifications || 0} · Надсилання для перевірки в чаті: ${current?.uncertain_deliveries || 0}`;
-    $("#retry-notifications").classList.toggle("hidden", !(current?.failed_notifications > 0));
-    $("[data-control=live]").classList.toggle("hidden", !connection.dry_run);
-    $("[data-control=dry_run]").classList.toggle("hidden", connection.dry_run);
-    const rights = connection.rights || {};
-    $("#connection-pill").className = `connection-pill ${live ? "live" : connection.is_active ? "" : "off"}`;
-    $("#connection-pill span:last-child").textContent = live ? "Активний" : current?.code === "dry_run" ? "Тест" : "Не відповідає";
-    $("#status-grid").innerHTML = [
-      ["Режим", statusLabel, live ? "Автовідповіді активні" : connection.dry_run ? "Клієнти не отримують відповіді" : "Перевірте стан"],
-      ["Відправник", delivery.sender_identity === "bot" ? "Секретар" : "Власник", delivery.sender_identity === "bot" ? "З видимим підписом" : "Без підпису"],
-      ["Затримка", delivery.sender_identity === "bot" ? `${delivery.bot_delay_seconds}–${Math.min(delivery.delay_max_seconds, 60)} с` : `${delivery.delay_min_seconds}–${delivery.delay_max_seconds} с`, "Випадковий інтервал"],
-      ["Права", rights.can_reply ? (rights.can_read_messages ? "Відповідь + читання" : "Тільки відповідь") : "Немає відповіді", rights.can_reply ? "Telegram Business" : "Потрібна увага"],
-    ].map(([label, value, note], index) => `<article class="status-card ${index === 3 && !rights.can_reply ? "attention" : ""}"><small>${label}</small><strong>${value}</strong><span>${note}</span></article>`).join("");
+    const current = state.bootstrap.status || {};
+    const mode = currentMode(connection);
+    const inactive = current.code === "inactive";
+    const paused = current.code === "paused";
+    const [title, note] = {
+      inactive: ["Немає підключення", "Перевірте бота в Chat Automation"],
+      stopped: ["Вимкнено", "Клієнти не отримують відповідей"],
+      paused: [`Пауза до ${current.muted_until ? localTime(current.muted_until) : "—"}`, ""],
+      outside_schedule: ["Чекає розкладу", current.next_start ? `Почне ${startsAt(current.next_start)}` : ""],
+      dry_run: ["Тестовий режим", current.window_end ? `До ${localTime(current.window_end)}` : ""],
+      live: ["Відповідає клієнтам", current.window_end ? `До ${localTime(current.window_end)}` : ""],
+    }[current.code] || [current.label || "Перевіряємо стан", ""];
+    $("#operating-title").textContent = title;
+    $("#operating-note").textContent = note;
+    $("#status-dot").dataset.state = inactive ? "off" : mode === "off" ? "off" : paused ? "paused" : mode;
+    $$("[data-mode]").forEach((button) => {
+      button.setAttribute("aria-pressed", String(button.dataset.mode === mode));
+      // Without the reply right only going live is impossible; off and test still work.
+      button.disabled = Boolean(state.controlBusy) || (inactive && button.dataset.mode === "live");
+    });
+    $(".mode-switch").setAttribute("aria-busy", String(Boolean(state.controlBusy)));
+    if (state.activeView === "logs") renderDiagnostics();
+    $("#mode-hint").textContent = mode === "test" ? "Клієнти нічого не отримують, відповіді приходять вам." : "";
+    const pause = $("#pause-toggle");
+    pause.classList.toggle("hidden", mode === "off");
+    pause.disabled = Boolean(state.controlBusy);
+    pause.dataset.control = paused ? "resume" : "pause";
+    pause.textContent = paused ? "Зняти паузу" : "Пауза на 1 год";
+    renderAttention();
+    const schedule = scheduleSummary(state.bootstrap.schedule?.windows);
+    $("#home-schedule").textContent = schedule;
+    $("#more-schedule").textContent = schedule;
+    $("#more-delivery").textContent = delivery.sender_identity === "bot" ? "Секретар" : "Від вас";
+  }
+
+  function renderAttention() {
+    const current = state.bootstrap.status || {};
+    const rights = state.bootstrap.connection.rights || {};
+    const items = [];
+    if (!rights.can_reply) items.push('<div class="list-row warn"><span>Немає права відповідати</span><small>Chat Automation</small></div>');
+    if (state.newContacts) items.push(`<button class="list-row warn" type="button" data-view="contacts"><span>Нові контакти</span><small>${state.newContacts}${state.newContactsMore ? "+" : ""}</small></button>`);
+    if (current.failed_notifications > 0) items.push(`<div class="list-row warn"><span>Сповіщення не доставлено</span><small>${current.failed_notifications}</small><button class="chip-button" id="retry-notifications" type="button">Повторити</button></div>`);
+    if (current.summary_status === "error") items.push('<button class="list-row warn" type="button" data-view="summary"><span>Підсумок не надіслано</span></button>');
+    if (current.uncertain_deliveries > 0) items.push(`<div class="list-row warn"><span>Перевірте надсилання в чатах</span><small>${current.uncertain_deliveries}</small></div>`);
+    const container = $("#attention");
+    container.innerHTML = items.join("");
+    container.classList.toggle("hidden", !items.length);
+  }
+
+  function renderDiagnostics() {
+    const current = state.bootstrap.status || {};
+    const rights = state.bootstrap.connection.rights || {};
+    const summary = { none: "ще не було", pending: "готується", delivered: "надіслано", error: "помилка" }[current.summary_status] || "—";
+    $("#operating-history").innerHTML = [
+      ["Остання відповідь", formatDate(current.last_reply_at)],
+      ["Остання помилка", errorLabels[current.last_error] || current.last_error || "немає"],
+      ["Підсумок", summary],
+      ["Сповіщення в черзі", current.pending_notifications || 0],
+      ["Права", rights.can_reply ? (rights.can_read_messages ? "відповідь і читання" : "лише відповідь") : "немає"],
+    ].map(([label, value]) => `<div><span>${label}</span><b>${escapeHtml(value)}</b></div>`).join("");
+  }
+
+  async function countNewContacts() {
+    try {
+      const result = await api("/api/v1/contacts?search=&offset=0");
+      const items = Array.isArray(result?.items) ? result.items : [];
+      state.newContacts = items.filter((contact) => !contact.configured).length;
+      state.newContactsMore = Boolean(result.has_more) && state.newContacts === items.length;
+      renderAttention();
+    } catch { /* The home screen stays usable without the count. */ }
   }
 
   function fillDelivery() {
@@ -252,6 +358,14 @@
     renderDelayRanges();
   }
 
+  function renderPreviewScope() {
+    const contact = state.previewContact;
+    $("#preview-scope").textContent = contact
+      ? `Для контакту: ${contactName(contact)}. Нічого не надсилається.`
+      : "За основним розкладом. Нічого не надсилається.";
+    $("#preview-clear-contact").classList.toggle("hidden", !contact);
+  }
+
   function fillEscalation() {
     const form = $("#escalation-form");
     const data = state.bootstrap.escalation;
@@ -261,8 +375,7 @@
     form.elements.offer_text.value = data.offer_text;
     form.elements.confirm_text.value = data.confirm_text;
     form.elements.decline_text.value = data.decline_text;
-    $("#escalation-badge").textContent = data.enabled ? "Увімкнено" : "Вимкнено";
-    $("#escalation-badge").classList.toggle("neutral", !data.enabled);
+    $("#escalation-badge").textContent = data.enabled ? `${data.price_amount} ${data.currency}` : "Вимкнено";
   }
 
   function renderDelayRanges() {
@@ -272,6 +385,13 @@
     const maximum = form.elements.delay_max_seconds.value;
     $("#bot-delay-range").textContent = botMin && maximum ? `${botMin}–${ui.botMaximum(maximum)} с` : "—";
     $("#owner-delay-range").textContent = ownerMin && maximum ? `${ownerMin}–${maximum} с` : "—";
+    // Only the chosen sender's minimum matters; the other stays saved but out of the way.
+    const bot = form.elements.sender_identity.value === "bot";
+    $$(".delay-bot", form).forEach((node) => node.classList.toggle("hidden", !bot));
+    $$(".delay-owner", form).forEach((node) => node.classList.toggle("hidden", bot));
+    // A hidden field must never block saving with a message nobody can see.
+    form.elements.bot_delay_seconds.disabled = !bot;
+    form.elements.delay_min_seconds.disabled = bot;
   }
 
   function createWindow(container, data = { weekday_mask: 127, time_from: "22:00", time_to: "08:00", is_active: true }) {
@@ -298,10 +418,8 @@
     const container = $("#contact-windows");
     const hasPersonalSchedule = $$(".window-row", container).length > 0;
     const inheritedWindows = state.bootstrap?.schedule?.windows || [];
-    $("#contact-schedule-source").textContent = hasPersonalSchedule
-      ? "Окремий час для цього контакту"
-      : "Зараз використовується основний розклад";
-    $("#add-contact-window").textContent = hasPersonalSchedule ? "+ Додати інтервал" : "Змінити для контакту";
+    $("#contact-schedule-source").textContent = hasPersonalSchedule ? "Особливий" : "Основний";
+    $("#add-contact-window").textContent = hasPersonalSchedule ? "+ Інтервал" : "Змінити";
     $("#add-contact-window").classList.toggle("edit-icon", !hasPersonalSchedule);
     $("#reset-contact-windows").classList.toggle("hidden", !hasPersonalSchedule);
     container.classList.toggle("hidden", !hasPersonalSchedule);
@@ -309,8 +427,8 @@
     preview.classList.toggle("hidden", hasPersonalSchedule);
     const activeInheritedWindows = inheritedWindows.filter((window) => window.is_active);
     preview.innerHTML = activeInheritedWindows.length
-      ? activeInheritedWindows.map((window) => `<div><strong>${escapeHtml(weekdayLabels[window.weekday_mask] || "Обрані дні")}</strong><span>Від <b>${escapeHtml(window.time_from.slice(0, 5))}</b> до <b>${escapeHtml(window.time_to.slice(0, 5))}</b></span></div>`).join("")
-      : '<div><span>Основний розклад ще не налаштовано.</span></div>';
+      ? activeInheritedWindows.map((window) => `<div><span>${escapeHtml(weekdayLabels[window.weekday_mask] || "Обрані дні")}</span><b>${escapeHtml(window.time_from.slice(0, 5))}–${escapeHtml(window.time_to.slice(0, 5))}</b></div>`).join("")
+      : '<div><span>Основний розклад не налаштовано</span></div>';
   }
 
   function windowsPayload(container) {
@@ -351,18 +469,20 @@
   function renderDirections(directions) {
     $("#direction-list").innerHTML = directions.map((direction) => {
       const custom = !["general", "money"].includes(direction.code);
-      const alwaysOn = direction.code === "general";
-      const toggle = alwaysOn
-        ? '<span class="direction-state always">Завжди увімкнено</span>'
-        : `<label class="direction-toggle"><span class="direction-state"></span><input class="direction-active" type="checkbox" role="switch" ${direction.is_active ? "checked" : ""}></label>`;
+      const toggle = direction.code === "general"
+        ? ""
+        : `<input class="direction-active switch" type="checkbox" role="switch" ${direction.is_active ? "checked" : ""}>`;
       return `
-        <article class="direction-card" data-code="${escapeHtml(direction.code)}">
+        <article class="card direction-card" data-code="${escapeHtml(direction.code)}">
           <header class="direction-head"><strong class="direction-title"></strong>${toggle}</header>
-          <label>Назва<input class="direction-label" maxlength="80" value="${escapeHtml(direction.label)}" required></label>
-          <label>Опис<textarea class="direction-description" maxlength="500" rows="3" required>${escapeHtml(direction.description)}</textarea></label>
-          <label class="direction-reply">Відповідь клієнту<small>Цей текст бот надішле на повідомлення такого типу.</small><textarea class="direction-template" maxlength="2000" rows="3" placeholder="Наприклад: Побачив ваше звернення, відповім уранці." required>${escapeHtml(direction.reply_template || "")}</textarea></label>
-          <label class="keywords">Ключові слова, через кому<small>ШІ підбере їх під час оновлення майстер-промпта. Використовуються, коли ШІ недоступний; для загального типу не потрібні.</small><input class="direction-keywords" value="${escapeHtml(direction.keywords.join(", "))}"></label>
-          ${custom ? '<button type="button" class="danger-button remove-direction">Видалити тип</button>' : ""}
+          <label class="direction-reply"><span class="visually-hidden">Відповідь клієнту</span><textarea class="direction-template" maxlength="2000" rows="3" placeholder="Що бот відповість клієнту" required>${escapeHtml(direction.reply_template || "")}</textarea></label>
+          <details class="direction-more" ${direction.label ? "" : "open"}>
+            <summary>${direction.code === "general" ? "Назва" : "Назва й опис"}</summary>
+            <label>Назва<input class="direction-label" maxlength="80" value="${escapeHtml(direction.label)}" required></label>
+            <label>Коли застосовувати<textarea class="direction-description" maxlength="500" rows="2" required>${escapeHtml(direction.description)}</textarea></label>
+            <label class="keywords">Ключові слова<input class="direction-keywords" value="${escapeHtml(direction.keywords.join(", "))}"><small>Через кому. Потрібні, лише коли ШІ недоступний.</small></label>
+            ${custom ? '<button type="button" class="chip-button danger remove-direction">Видалити тип</button>' : ""}
+          </details>
         </article>`;
     }).join("");
     $$(".direction-card").forEach(renderDirectionHead);
@@ -374,7 +494,6 @@
     if (!toggle) return;
     toggle.setAttribute("aria-label", `Тип «${$(".direction-title", card).textContent}»`);
     card.classList.toggle("is-off", !toggle.checked);
-    $(".direction-state", card).textContent = toggle.checked ? "Увімкнено" : "Вимкнено";
   }
 
   function validateClassifierForm(form) {
@@ -382,10 +501,15 @@
       .find((field) => !field.value.trim());
     const invalid = blank || $$('input, textarea, select', form).find((field) => !field.checkValidity());
     if (!invalid) return true;
+    const details = invalid.closest("details");
+    if (details) details.open = true;
     if (!blank) form.reportValidity();
     invalid?.scrollIntoView({behavior: "smooth", block: "center"});
     invalid?.focus({preventScroll: true});
-    const message = invalid?.matches(".direction-template")
+    const card = invalid.closest(".direction-card");
+    const onlyReplyMissing = invalid.matches(".direction-template") && card
+      && $$(".direction-label, .direction-description", card).every((field) => field.value.trim());
+    const message = onlyReplyMissing
       ? "Додайте відповідь клієнту для цього типу."
       : "Заповніть назву, опис і відповідь для типу.";
     toast(message, true);
@@ -393,21 +517,11 @@
     return false;
   }
 
+  // Changing the types makes the AI instruction stale; saving then regenerates it first.
   function setClassifierGenerationState(stale) {
     const form = $("#classifier-form");
     form.dataset.promptStale = String(stale);
-    const step = $("#classifier-generation-step");
-    const status = $("#classifier-generation-status");
-    const save = $("#save-classifier");
-    const hint = $("#classifier-save-hint");
-    step.classList.toggle("needs-generation", stale);
-    save.disabled = stale;
-    status.textContent = stale
-      ? "Типи змінено. Згенеруйте правила, щоб перейти до збереження."
-      : "Майстер-промпт і ключові слова відповідають поточним типам.";
-    hint.textContent = stale
-      ? "Спочатку завершіть крок 2 — згенеруйте правила для змінених типів."
-      : "Після збереження нові типи почнуть використовуватися класифікатором.";
+    if (!stale) form.dataset.promptEdited = "false";
   }
 
   function fillClassifier() {
@@ -428,17 +542,14 @@
     form.elements.summary_time.value = data.summary_time;
     form.elements.summary_channel_id.value = data.summary_channel_id ?? "";
     form.elements.message_retention_enabled.checked = data.message_retention_enabled;
-    $("#retention-badge").textContent = data.message_retention_enabled ? "Зашифровано · 48 год" : "Вимкнено";
-    $("#retention-badge").classList.toggle("neutral", !data.message_retention_enabled);
-    const size = data.retained_bytes < 1024 ? `${data.retained_bytes} Б` : `${(data.retained_bytes / 1024).toFixed(1)} КБ`;
+    $("#retention-badge").textContent = data.message_retention_enabled ? data.summary_time.slice(0, 5) : "Вимкнено";
     $("#retention-stats").textContent = data.message_retention_enabled
-      ? `Збережено повідомлень: ${data.retained_message_count} · зашифрований обсяг: ${size}${data.next_deletion_at ? ` · найближче видалення ${formatDate(data.next_deletion_at)}` : ""}`
-      : "Тексти повідомлень не зберігаються.";
+      ? `Збережено повідомлень: ${data.retained_message_count}`
+      : "";
     const connected = Boolean(data.summary_channel_id);
-    const channelName = data.summary_channel_title || (connected ? "Підключений Telegram-канал" : "");
     $("#summary-channel-state").textContent = connected
-      ? `${channelName} · щоденний підсумок надходитиме в канал.`
-      : "Канал не підключено — підсумок надходитиме в особистий чат.";
+      ? data.summary_channel_title || "Telegram-канал"
+      : "Чат із ботом";
     $("#disconnect-summary-channel").classList.toggle("hidden", !connected);
     $("#choose-summary-channel").classList.toggle("hidden", !tg?.requestChat);
     if (!tg?.requestChat) $("#summary-channel-fallback").open = true;
@@ -493,11 +604,31 @@
   function renderContacts() {
     const list = $("#contact-list");
     if (!state.contacts.length) {
-      list.innerHTML = `<div class="empty-row">${$("#contact-search").value.trim() ? "Контактів за цим пошуком немає. Спробуйте інше ім’я або @username." : "Контакт з’явиться після першого повідомлення в чаті — вашого або співрозмовника."}</div>`;
+      list.innerHTML = `<div class="empty-row">${$("#contact-search").value.trim() ? "Нічого не знайдено" : "Контакт з’явиться після першого повідомлення в чаті"}</div>`;
       return;
     }
-    list.innerHTML = state.contacts.map((contact) => `<button type="button" class="contact-item ${state.selectedContact?.contact_id === contact.contact_id ? "active" : ""} ${contact.configured ? "" : "needs-setup"}" data-contact-id="${contact.contact_id}"><strong>${escapeHtml(contactName(contact))}</strong>${contact.configured ? "" : '<small class="neutral">Не налаштовано — бот не відповідає</small>'}<small>Останнє повідомлення: ${formatDate(contact.last_incoming_at)} · за 30 днів: ${contact.auto_reply_count} відповідей, ${contact.preview_count || 0} прев’ю · за весь час платних звернень: ${contact.paid_escalation_count} із ${contact.off_hours_request_count}</small></button>`).join("");
+    list.innerHTML = state.contacts.map((contact) => `<button type="button" class="contact-item ${state.selectedContact?.contact_id === contact.contact_id ? "active" : ""} ${contact.configured ? "" : "needs-setup"}" data-contact-id="${contact.contact_id}"><strong>${escapeHtml(contactName(contact))}</strong><small>${escapeHtml(contactState(contact))}</small></button>`).join("");
     $$(".contact-item", list).forEach((button) => button.addEventListener("click", () => selectContact(Number(button.dataset.contactId))));
+  }
+
+  function contactState(contact) {
+    if (!contact.configured) return "Не налаштовано";
+    if (contact.exclusion === "forever") return "Не відповідати";
+    if (contact.exclusion === "until") return contact.exclusion_until ? `Пауза до ${formatDate(contact.exclusion_until)}` : "Пауза";
+    return contact.windows?.length ? "Особливий розклад" : "За розкладом";
+  }
+
+  function closeContact() {
+    const editor = $("#contact-form");
+    if (editor.dataset.dirty === "true" && !window.confirm("Відкинути незбережені зміни контакту?")) return;
+    setDirty(editor, false);
+    state.selectedContact = null;
+    $("#contact-layout").classList.remove("editing");
+    editor.classList.add("empty");
+    $("#contact-empty").classList.remove("hidden");
+    $("#contact-fields").classList.add("hidden");
+    renderContacts();
+    renderBackButton();
   }
 
   function selectContact(contactId, saved = false) {
@@ -508,12 +639,16 @@
     state.selectedContact = contact;
     renderContacts();
     fillContactForm(contact);
+    $("#contact-layout").classList.add("editing");
+    window.scrollTo({ top: 0 });
+    renderBackButton();
   }
 
   // The selected card is kept as its own snapshot: a later search may drop it
   // from the visible list, and discarding edits must still restore it.
   function renderContactMeta(contact) {
-    $("#contact-meta").textContent = `Останнє повідомлення: ${formatDate(contact.last_incoming_at)}. Дата паузи та розклад — у часовому поясі бота: ${state.bootstrap.schedule.timezone}.`;
+    $("#contact-meta").textContent = `Останнє повідомлення ${formatDate(contact.last_incoming_at)}`;
+    $("#exclusion-zone").textContent = `(${state.bootstrap.schedule.timezone})`;
   }
 
   function fillContactForm(contact) {
@@ -524,6 +659,8 @@
     $("#contact-fields").classList.remove("hidden");
     $("#contact-title").textContent = contactName(contact);
     $("#contact-setup-note").classList.toggle("hidden", Boolean(contact.configured));
+    // A new contact is reviewed by saving it, so its save button shows even without edits.
+    form.classList.toggle("needs-save", !contact.configured);
     renderContactMeta(contact);
     $(`input[name=exclusion][value=${contact.exclusion}]`, form).checked = true;
     form.dataset.exclusionOriginal = contact.exclusion_until || "";
@@ -534,6 +671,12 @@
     windows.innerHTML = "";
     contact.windows.forEach((window) => createWindow(windows, window));
     renderContactScheduleEditor();
+    renderExclusionUntil();
+  }
+
+  function renderExclusionUntil() {
+    const form = $("#contact-form");
+    $(".exclusion-until", form).classList.toggle("hidden", form.elements.exclusion.value !== "until");
   }
 
   async function loadLogs(append = false) {
@@ -556,7 +699,7 @@
       params.set("offset", append ? state.logOffset || 0 : 0);
       const result = await api(`/api/v1/logs?${params}`);
       state.logOffset = result.next_offset;
-      $("#log-timezone").textContent = `Час у поясі бота: ${state.bootstrap.schedule.timezone}`;
+      $("#log-timezone").textContent = `Час за ${state.bootstrap.schedule.timezone}`;
       $("#more-logs").classList.toggle("hidden", !result.has_more);
       const rows = result.items.length ? result.items.map((row) => `<tr><td>${formatDate(row.occurred_at)}</td><td>${escapeHtml(row.contact_label)}</td><td>${escapeHtml(actionLabels[row.action] || row.action)}</td><td>${escapeHtml(categoryLabels[row.category] || "—")}</td><td>${escapeHtml(errorLabels[row.error_code] || row.error_code || templateLabels[row.template_code] || "—")}</td></tr>`).join("") : '<tr><td class="empty-row" colspan="5">За вибраними фільтрами записів немає.</td></tr>';
       if (append) $("#log-rows").insertAdjacentHTML("beforeend", rows); else $("#log-rows").innerHTML = rows;
@@ -589,9 +732,9 @@
     select.value = previous && options.some((option) => option.includes(`value="${previous}"`)) ? previous : referenceMonth;
     const inTelegram = Boolean(tg?.initData);
     $("#pdf-export-note").textContent = inTelegram
-      ? "PDF відкриється у зовнішньому браузері та буде доступний у його завантаженнях. Посилання одноразове."
-      : "PDF буде збережено у стандартну папку завантажень браузера.";
-    $("#download-monthly-pdf").textContent = inTelegram ? "Відкрити PDF у браузері" : "Завантажити PDF";
+      ? "Відкриється в браузері"
+      : "Збережеться в завантаження";
+    $("#download-monthly-pdf").textContent = inTelegram ? "Відкрити" : "Завантажити";
   }
 
   function renderAnalytics() {
@@ -601,7 +744,7 @@
     const form = $("#analytics-filter");
     form.elements.date_from.value = data.period.date_from;
     form.elements.date_to.value = data.period.date_to;
-    $("#analytics-timezone").textContent = `Часовий пояс: ${data.period.timezone}`;
+    $("#analytics-timezone").textContent = `Час за ${data.period.timezone}`;
     $("#analytics-totals").innerHTML = [
       ["Контакти", totals.contacts],
       ["Повідомлення", totals.messages],
@@ -668,38 +811,78 @@
   function bindEvents() {
     $("#preview-form").addEventListener("submit", event => {
       event.preventDefault(); const form = event.currentTarget;
-      withBusyButton($("button", form), "Перевіряємо…", async () => {
-        const result = await api("/api/v1/preview", {method:"POST", body:JSON.stringify({text:form.elements.text.value, contact_id:state.selectedContact?.contact_id || null})});
-        const draftNote = $("#contact-form").dataset.dirty === "true" ? "Перевірка за збереженими правилами: незбережені зміни контакту не враховано. " : "";
-        const templateNote = result.forced_template ? "Шаблон: персональний для контакту" : `Шаблон: ${templateLabels[result.template_code] || "за типом"}`;
-        $("#preview-result").textContent = `${draftNote}${result.decision === "allowed" ? (result.dry_run ? "Буде лише тестове прев’ю" : "Відповідь дозволена") : actionLabels[result.decision] || result.decision}. ${result.personal_schedule ? "Персональний" : "Основний"} розклад, ${result.timezone}. Тип: ${categoryLabels[result.category] || result.category}. ${templateNote}. Приклад відповіді: ${result.text}`;
+      withBusyButton($("button[type=submit]", form), "Перевіряємо…", async () => {
+        const result = await api("/api/v1/preview", {method:"POST", body:JSON.stringify({text:form.elements.text.value, contact_id:state.previewContact?.contact_id || null})});
+        const draftNote = state.previewContact && $("#contact-form").dataset.dirty === "true" ? "Незбережені зміни контакту не враховано. " : "";
+        const decision = result.decision === "allowed" ? (result.dry_run ? "Лише прев’ю вам" : "Бот відповість") : actionLabels[result.decision] || result.decision;
+        const templateNote = result.forced_template ? "шаблон персональний для контакту" : `тип «${categoryLabels[result.category] || result.category}»`;
+        $("#preview-result").textContent = `${draftNote}${decision}: ${templateNote}. ${result.text}`;
       });
     });
-    $("#retry-notifications").addEventListener("click", (event) => withBusyButton(event.currentTarget, "Повторюємо…", async () => {
-      const fresh = await api("/api/v1/notifications/retry", {method:"POST"});
-      state.bootstrap.connection = fresh.connection; state.bootstrap.status = fresh.status;
-      renderStatus(); toast("Сповіщення поставлено в чергу повторно");
-    }));
+    $("#preview-clear-contact").addEventListener("click", () => { state.previewContact = null; renderPreviewScope(); });
+    $("#attention").addEventListener("click", (event) => {
+      const button = event.target.closest("#retry-notifications");
+      if (!button) return;
+      withBusyButton(button, "Повторюємо…", async () => {
+        const fresh = await api("/api/v1/notifications/retry", {method:"POST"});
+        state.bootstrap.connection = fresh.connection; state.bootstrap.status = fresh.status;
+        renderStatus(); toast("Сповіщення поставлено в чергу повторно");
+      });
+    });
     $("#retry-load").addEventListener("click", () => location.reload());
     $("#more-contacts").addEventListener("click", () => loadContacts(true));
     $("#more-logs").addEventListener("click", () => loadLogs(true));
     $$("form").filter(form => !form.id.endsWith("filter") && form.id !== "preview-form").forEach(form => {
-      form.addEventListener("input", () => setDirty(form, true));
-      form.addEventListener("change", () => setDirty(form, true));
+      const track = (event) => { if (!event.target.closest?.("[data-no-dirty]")) setDirty(form, true); };
+      form.addEventListener("input", track);
+      form.addEventListener("change", track);
     });
     window.addEventListener("beforeunload", event => {
       if ($$("form[data-dirty=true]").length) { event.preventDefault(); event.returnValue = ""; }
     });
     document.addEventListener("visibilitychange", refreshStatus);
     window.addEventListener("focus", refreshStatus);
-    $$("[data-control]").forEach(button => button.addEventListener("click", () => withBusyButton(button, "Змінюємо…", async () => {
-      const action = button.dataset.control;
-      if (action === "live" && !window.confirm("Дозволити секретарю надсилати реальні відповіді клієнтам за розкладом?")) return;
+    const control = async (action) => {
       const fresh = await api("/api/v1/control", {method:"POST", body:JSON.stringify({action, confirmed:action === "live"})});
       state.bootstrap.connection = fresh.connection; state.bootstrap.status = fresh.status;
-      renderStatus(); toast("Стан оновлено");
-    })));
-    $$("[data-view]").forEach((button) => button.addEventListener("click", () => navigate(button.dataset.view)));
+    };
+    // One change at a time: the labels come from the server state, so they are
+    // re-rendered afterwards instead of being restored like a plain busy button.
+    async function changeMode(steps, message) {
+      if (state.controlBusy) return;
+      state.controlBusy = true;
+      renderStatus();
+      try {
+        for (const action of steps) await control(action);
+        toast(message);
+      } catch (error) {
+        toast(error.message, true);
+        tg?.HapticFeedback?.notificationOccurred?.("error");
+      } finally {
+        state.controlBusy = false;
+        renderStatus();
+      }
+    }
+    $$("[data-mode]").forEach((button) => button.addEventListener("click", () => {
+      const mode = button.dataset.mode;
+      const { connection } = state.bootstrap;
+      if (state.controlBusy || mode === currentMode(connection)) return;
+      if (mode === "live" && !window.confirm("Секретар почне надсилати клієнтам реальні відповіді за розкладом. Увімкнути?")) return;
+      // Leaving "off" also lifts the kill switch; a pause is cleared with it.
+      const steps = mode === "off" ? ["stop"] : [mode === "live" ? "live" : "dry_run", ...(connection.kill_switch ? ["resume"] : [])];
+      changeMode(steps, "Режим змінено");
+    }));
+    $("#pause-toggle").addEventListener("click", (event) => {
+      const action = event.currentTarget.dataset.control;
+      changeMode([action], action === "pause" ? "Пауза на 1 годину" : "Паузу знято");
+    });
+    // Rows that open a view can be rendered later (the attention list), so listen once.
+    document.addEventListener("click", (event) => {
+      const target = event.target.closest("[data-view]");
+      if (target && !target.disabled) navigate(target.dataset.view);
+    });
+    $("#back-button").addEventListener("click", goBack);
+    window.matchMedia?.("(min-width: 900px)")?.addEventListener?.("change", () => { if (state.bootstrap) renderBackButton(); });
     $("#create-invite").addEventListener("click", (event) => withBusyButton(event.currentTarget, "Створюємо…", async () => {
       const result = await api("/api/v1/access/invites", { method: "POST" });
       $("#invite-url").value = result.url;
@@ -725,10 +908,17 @@
     ["delay_min_seconds", "delay_max_seconds", "bot_delay_seconds"].forEach((name) => {
       $("#delivery-form").elements[name].addEventListener("input", renderDelayRanges);
     });
+    $$("#delivery-form [name=sender_identity]").forEach((input) => input.addEventListener("change", renderDelayRanges));
     $("#delivery-form").addEventListener("submit", (event) => { event.preventDefault(); submit(event.currentTarget, async () => {
       const form = event.currentTarget;
       const rawLimit = Number(form.elements.max_auto_replies_per_window.value);
-      state.bootstrap.delivery = await api("/api/v1/delivery", { method: "PUT", body: JSON.stringify({ sender_identity: form.elements.sender_identity.value, delay_min_seconds: Number(form.elements.delay_min_seconds.value), delay_max_seconds: Number(form.elements.delay_max_seconds.value), bot_delay_seconds: Number(form.elements.bot_delay_seconds.value), mark_read: form.elements.mark_read.checked, max_auto_replies_per_window: rawLimit || null }) });
+      const maximum = Number(form.elements.delay_max_seconds.value);
+      // The hidden sender's minimum is kept, but clamped so the server accepts it.
+      const botMinimum = Math.max(1, Math.min(Number(form.elements.bot_delay_seconds.value) || 1, Math.min(maximum, 60)));
+      const ownerMinimum = Math.max(0, Math.min(Number(form.elements.delay_min_seconds.value) || 0, maximum));
+      const bot = form.elements.sender_identity.value === "bot";
+      state.bootstrap.delivery = await api("/api/v1/delivery", { method: "PUT", body: JSON.stringify({ sender_identity: form.elements.sender_identity.value, delay_min_seconds: bot ? ownerMinimum : Number(form.elements.delay_min_seconds.value), delay_max_seconds: maximum, bot_delay_seconds: bot ? Number(form.elements.bot_delay_seconds.value) : botMinimum, mark_read: form.elements.mark_read.checked, max_auto_replies_per_window: rawLimit || null }) });
+      fillDelivery();
       renderStatus();
     }); });
     $("#escalation-form").addEventListener("submit", (event) => { event.preventDefault(); submit(event.currentTarget, async () => {
@@ -746,9 +936,11 @@
         renderContactScheduleEditor();
       }
       await refreshStatus();
+      renderStatus();
     }); });
     let searchTimer;
     $("#contact-search").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadContacts, 250); });
+    $("#contact-form").addEventListener("change", (event) => { if (event.target.name === "exclusion") renderExclusionUntil(); });
     $("#add-contact-window").addEventListener("click", () => {
       setDirty($("#contact-form"), true);
       const container = $("#contact-windows");
@@ -776,6 +968,8 @@
       state.selectedContact = saved;
       renderContacts();
       fillContactForm(saved);
+      renderBackButton();
+      countNewContacts();
     }); });
     $("#add-direction").addEventListener("click", () => {
       const directions = directionsPayload();
@@ -783,7 +977,7 @@
       directions.push({code: `type_${crypto.randomUUID().replaceAll("-", "")}`, label: "", description: "", keywords: [], reply_template: "", is_active: true});
       renderDirections(directions);
       const card = $$(".direction-card").at(-1);
-      $(".direction-label", card).focus();
+      $(".direction-template", card).focus();
       card.scrollIntoView({behavior: "smooth", block: "center"});
       setClassifierGenerationState(true);
       $("#classifier-form").dispatchEvent(new Event("input", {bubbles: true}));
@@ -794,6 +988,7 @@
       setClassifierGenerationState(true);
       $("#classifier-form").dispatchEvent(new Event("input", {bubbles: true}));
     });
+    $("#classifier-form").elements.system_prompt.addEventListener("input", (event) => { event.currentTarget.form.dataset.promptEdited = "true"; });
     $("#direction-list").addEventListener("input", (event) => {
       if (event.target.matches(".direction-label, .direction-active")) renderDirectionHead(event.target.closest(".direction-card"));
       if (event.target.matches(".direction-label, .direction-description, .direction-active")) {
@@ -806,46 +1001,51 @@
         setClassifierGenerationState(true);
       }
     });
-    $("#expand-classifier").addEventListener("click", async (event) => {
-      const form = $("#classifier-form");
-      if (!validateClassifierForm(form)) return;
-      const button = event.currentTarget;
+    // Changed types need a fresh AI instruction; saving produces it first, so the
+    // owner never has to run a separate generation step.
+    async function regenerateRules(form) {
       const payload = classifierPayload();
       const snapshot = JSON.stringify(payload);
-      button.disabled = true;
-      button.textContent = "Генеруємо…";
-      try {
-        const result = await api("/api/v1/classifier/expand", {method: "POST", body: snapshot});
-        if (JSON.stringify(classifierPayload()) !== snapshot) {
-          toast("Налаштування змінилися під час генерації. Згенеруйте ще раз."); return;
-        }
-        const keywordsByCode = new Map(result.directions.map((d) => [d.code, d.keywords]));
-        if (keywordsByCode.size !== payload.directions.length ||
-            payload.directions.some((d) => !keywordsByCode.has(d.code))) {
-          throw new Error("ШІ повернув неповний результат. Спробуйте ще раз.");
-        }
-        $$(".direction-card").forEach((card) => {
-          $(".direction-keywords", card).value = keywordsByCode.get(card.dataset.code).join(", ");
-        });
-        form.elements.system_prompt.value = result.system_prompt;
-        form.dispatchEvent(new Event("input", {bubbles: true}));
-        setClassifierGenerationState(false);
-        form.elements.system_prompt.focus();
-        toast("Інструкцію та ключові слова згенеровано. Перевірте їх і збережіть.");
-      } catch (error) { toast(error.message); }
-      finally { button.disabled = false; button.textContent = "Згенерувати правила для типів"; }
-    });
+      const result = await api("/api/v1/classifier/expand", {method: "POST", body: JSON.stringify(payload)});
+      const keywordsByCode = new Map((result.directions || []).map((d) => [d.code, d.keywords || []]));
+      if (keywordsByCode.size !== payload.directions.length || payload.directions.some((d) => !keywordsByCode.has(d.code))) {
+        throw new Error("ШІ повернув неповний результат.");
+      }
+      // inert is missing in older WebViews: never apply rules to types edited meanwhile.
+      if (JSON.stringify(classifierPayload()) !== snapshot) {
+        const error = new Error("Типи змінилися під час оновлення правил. Збережіть ще раз.");
+        error.abort = true;
+        throw error;
+      }
+      $$(".direction-card").forEach((card) => {
+        $(".direction-keywords", card).value = keywordsByCode.get(card.dataset.code).join(", ");
+      });
+      form.elements.system_prompt.value = result.system_prompt;
+      setClassifierGenerationState(false);
+    }
     $("#classifier-form").addEventListener("submit", (event) => {
       event.preventDefault();
       const form = event.currentTarget;
       if (!validateClassifierForm(form)) return;
+      // The form is locked while the slow AI call and the save run, so what is
+      // saved is exactly what the instruction was generated for.
+      form.inert = true;
+      form.setAttribute("aria-busy", "true");
       submit(form, async () => {
+        if (form.dataset.promptStale === "true" && form.dataset.promptEdited === "true"
+          && !window.confirm("Типи змінилися, тому інструкцію ШІ буде оновлено, а ваші ручні правки в ній замінено. Зберегти?")) return false;
         if (form.dataset.promptStale === "true") {
-          throw new Error("Спочатку згенеруйте правила для змінених типів");
+          $("#save-classifier").textContent = "Оновлюємо правила…";
+          try { await regenerateRules(form); }
+          catch (error) {
+            if (error.abort) throw error;
+            if (!window.confirm(`${error.message} Зберегти без оновлення правил ШІ?`)) return false;
+          }
+          $("#save-classifier").textContent = "Зберігаємо…";
         }
         state.bootstrap.classifier = await api("/api/v1/classifier", { method: "PUT", body: JSON.stringify(classifierPayload()) });
         fillClassifier();
-      });
+      }).finally(() => { form.inert = false; form.removeAttribute("aria-busy"); });
     });
     $("#summary-form").addEventListener("submit", (event) => { event.preventDefault(); submit(event.currentTarget, async () => {
       const form = event.currentTarget;
@@ -926,10 +1126,11 @@
     $("#views").classList.remove("hidden");
     $("#users-nav").classList.toggle("hidden", state.bootstrap.user.role !== "master");
     if (!tg?.initData) $("#logout").classList.remove("hidden");
-    renderStatus(); fillDelivery(); fillEscalation(); fillSchedule(); fillClassifier(); fillSummary();
+    fillSchedule(); renderStatus(); fillDelivery(); fillEscalation(); fillClassifier(); fillSummary();
     // Reply templates now live on the request types; keep old #templates links working.
     const requested = location.hash.slice(1) === "templates" ? "classifier" : location.hash.slice(1);
     navigate(titles[requested] ? requested : "overview");
+    countNewContacts();
     $("#app").setAttribute("aria-busy", "false");
   }
 

@@ -73,15 +73,6 @@ test('master can create an invite and approve a pending user in the mini app',as
   w.document.querySelector('[data-access-action=approve]').click(); await tick(); await tick();
   assert.deepEqual(calls,['POST']);
 });
-test('pause overrides live badge, and bot range matches the actual 60-second cap',async t=>{
-  const data=structuredClone(base); data.connection.dry_run=false;
-  data.status={...data.status,code:'paused',label:'Тимчасова пауза'};
-  data.delivery.delay_max_seconds=120;
-  const w=await screen(t,{data});
-  assert.equal(w.document.querySelector('#operating-title').textContent,'Тимчасова пауза');
-  assert.equal(w.document.querySelector('#bot-delay-range').textContent,'5–60 с');
-  assert.equal(w.document.querySelector('#connection-pill').textContent.includes('Активний'),false);
-});
 test('switching contacts preserves edits when discard is declined',async t=>{
   const w=await screen(t,{handler:path=>path.startsWith('/api/v1/contacts')?response({items:[contact(100),contact(101)],has_more:false}):null});
   w.document.querySelector('[data-view=contacts]').click(); await tick();
@@ -171,36 +162,6 @@ test('date round-trip uses the bot timezone whatever the device is set to',()=>{
 
 // --- Review of the uncommitted work (docs/uncommitted-review-2026-09-05.md) ----
 
-test('R2: abandoned notifications are shown with a retry action',async t=>{
-  const data=structuredClone(base); data.status={...data.status,failed_notifications:2,last_error:'NOTIFICATION_FAILED'};
-  let retried=false;
-  const w=await screen(t,{data,handler:path=>{ if(path==='/api/v1/notifications/retry'){retried=true;return response({...data,status:{...data.status,failed_notifications:0,pending_notifications:2}});} }});
-  const button=w.document.querySelector('#retry-notifications');
-  assert.equal(button.classList.contains('hidden'),false);
-  assert.match(w.document.querySelector('#operating-history').textContent,/Недоставлені сповіщення: 2/);
-  assert.match(w.document.querySelector('#operating-history').textContent,/не доставлено/);
-  button.click(); await tick(); await tick();
-  assert.equal(retried,true);
-  assert.equal(button.classList.contains('hidden'),true);
-});
-test('R3: rule preview says it ignores unsaved contact edits and names the template',async t=>{
-  let previewBody;
-  const w=await screen(t,{handler:(path,options)=>{
-    if(path==='/api/v1/preview'){previewBody=JSON.parse(options.body);return response({decision:'allowed',category:'general',template_code:'money_priority',forced_template:true,text:'x',dry_run:true,timezone:'Europe/Kyiv',source:'keywords',personal_schedule:false});}
-    if(path.startsWith('/api/v1/contacts'))return response({items:[contact(100)],has_more:false});
-  }});
-  w.document.querySelector('[data-view=contacts]').click(); await tick();
-  w.document.querySelector('[data-contact-id="100"]').click();
-  const form=w.document.querySelector('#contact-form');
-  form.elements.exclusion.value='forever';form.dispatchEvent(new w.Event('input',{bubbles:true}));
-  const preview=w.document.querySelector('#preview-form');
-  preview.elements.text.value='Привіт';
-  preview.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await tick();await tick();
-  assert.equal(previewBody.contact_id,100);
-  const text=w.document.querySelector('#preview-result').textContent;
-  assert.match(text,/незбережені зміни контакту не враховано/);
-  assert.match(text,/персональний для контакту/);
-});
 test('R4: discarding contact edits after a search restores the card from its snapshot',async t=>{
   const w=await screen(t,{handler:path=>{
     if(path.startsWith('/api/v1/contacts?search=101'))return response({items:[contact(101)],has_more:false});
@@ -252,7 +213,7 @@ test('saving the global schedule refreshes the open contact without losing its d
   };
   await saveSchedule('21:15');
   assert.match(d.querySelector('#contact-schedule-preview').textContent, /21:15/);
-  assert.match(d.querySelector('#contact-meta').textContent, /у часовому поясі бота: Europe\/Prague/);
+  assert.match(d.querySelector('#exclusion-zone').textContent, /Europe\/Prague/);
   assert.equal(contactForm.elements.exclusion.value, 'forever');
   assert.equal(contactForm.dataset.dirty, 'true');
   d.querySelector('#add-contact-window').click();
@@ -265,78 +226,6 @@ test('saving the global schedule refreshes the open contact without losing its d
   assert.equal(d.querySelector('#contact-schedule-preview').classList.contains('hidden'), true);
 });
 
-test('custom direction is editable and expansion is a draft until explicit save', async t => {
-  let saved = null;
-  let expanded;
-  const w = await screen(t, {handler: (path, options) => {
-    if (path === '/api/v1/classifier/expand') {
-      expanded = JSON.parse(options.body);
-      return response({system_prompt:'Новий майстер-промпт для general, money та підтримки.', directions: expanded.directions.map(d => ({code:d.code,keywords:d.code==='general'?[]:d.code==='money'?['оплата']:['увійти','авторизац']}))});
-    }
-    if (path === '/api/v1/classifier') {
-      saved = JSON.parse(options.body);
-      return response(saved);
-    }
-  }});
-  const doc = w.document;
-  doc.querySelector('#add-direction').click();
-  const card = [...doc.querySelectorAll('.direction-card')].at(-1);
-  card.querySelector('.direction-label').value = 'Підтримка';
-  card.querySelector('.direction-description').value = 'Помилки в роботі';
-  card.querySelector('.direction-template').value = 'Перевірю';
-  assert.equal(card.querySelector('.direction-priority'), null);
-  const form = doc.querySelector('#classifier-form');
-  assert.equal(form.dataset.dirty, 'true');
-  assert.equal(form.dataset.promptStale, 'true');
-  assert.equal(doc.querySelector('#save-classifier').disabled, true);
-  assert.match(doc.querySelector('#classifier-generation-status').textContent, /Згенеруйте правила/);
-  assert.equal(doc.querySelector('#add-direction').classList.contains('secondary'), true);
-  assert.equal(doc.querySelector('#expand-classifier').classList.contains('primary'), true);
-  assert.equal(card.querySelector('.remove-direction').classList.contains('danger-button'), true);
-  doc.querySelector('#expand-classifier').click(); await tick(); await tick();
-  assert.equal(expanded.directions.length, 3);
-  assert.equal(saved, null);
-  assert.match(form.elements.system_prompt.value, /Новий майстер/);
-  assert.equal(form.dataset.promptStale, 'false');
-  assert.equal(doc.querySelector('#save-classifier').disabled, false);
-  form.dispatchEvent(new w.Event('submit', {bubbles:true,cancelable:true}));
-  await tick(); await tick();
-  assert.equal(saved.directions[2].reply_template, 'Перевірю');
-  assert.equal('priority' in saved.directions[2], false);
-  assert.equal(saved.directions[0].reply_template, base.templates.off_hours_default);
-  assert.deepEqual(saved.directions[2].keywords, ['увійти','авторизац']);
-  assert.equal(saved.directions[2].description, 'Помилки в роботі');
-});
-
-test('custom direction cannot be generated without a client reply', async t => {
-  let expansionCalls = 0;
-  const w = await screen(t, {handler: path => {
-    if (path === '/api/v1/classifier/expand') expansionCalls += 1;
-  }});
-  const doc = w.document;
-  doc.querySelector('#add-direction').click();
-  const card = [...doc.querySelectorAll('.direction-card')].at(-1);
-  doc.querySelector('#expand-classifier').click();
-  await tick();
-  assert.equal(expansionCalls, 0);
-  assert.equal(doc.activeElement, card.querySelector('.direction-label'));
-  assert.match(doc.querySelector('#toast').textContent, /назву, опис і відповідь/);
-
-  card.querySelector('.direction-label').value = 'Підтримка';
-  card.querySelector('.direction-description').value = 'Проблеми зі входом';
-  const reply = card.querySelector('.direction-template');
-  reply.value = '   ';
-  assert.equal(reply.required, true);
-
-  doc.querySelector('#expand-classifier').click();
-  await tick();
-
-  assert.equal(expansionCalls, 0);
-  assert.equal(doc.activeElement, reply);
-  assert.match(doc.querySelector('#toast').textContent, /Додайте відповідь клієнту/);
-  assert.equal(doc.querySelector('[data-code="general"] .direction-template').required, true);
-});
-
 test('templates tab is gone: built-in types show their reply, old links land on the types', async t => {
   const w = await screen(t, {url:'https://testserver/app/#templates'});
   const doc = w.document;
@@ -347,18 +236,257 @@ test('templates tab is gone: built-in types show their reply, old links land on 
   assert.equal(doc.querySelector('[data-code="money"] .direction-template').value, base.templates.money_priority);
 });
 
-test('each type shows a clear on/off state and general cannot be switched off', async t => {
+test('pause shows on the home screen, and the bot range matches the actual 60-second cap',async t=>{
+  const data=structuredClone(base); data.connection.dry_run=false;
+  data.status={...data.status,code:'paused',label:'Тимчасова пауза',muted_until:'2026-09-05T20:30:00Z'};
+  data.delivery.delay_max_seconds=120;
+  const w=await screen(t,{data});
+  const d=w.document;
+  assert.equal(d.querySelector('#operating-title').textContent,'Пауза до 23:30');
+  assert.equal(d.querySelector('#status-dot').dataset.state,'paused');
+  assert.equal(d.querySelector('[data-mode=live]').getAttribute('aria-pressed'),'true');
+  assert.equal(d.querySelector('#pause-toggle').textContent,'Зняти паузу');
+  assert.equal(d.querySelector('#bot-delay-range').textContent,'5–60 с');
+});
+
+test('the three modes map onto the existing control actions',async t=>{
+  const calls=[];
+  const data=structuredClone(base);
+  const w=await screen(t,{data,handler:(path,options)=>{
+    if(path!=='/api/v1/control')return null;
+    const {action}=JSON.parse(options.body); calls.push(action);
+    const c=data.connection;
+    if(action==='stop')c.kill_switch=true; if(action==='resume')c.kill_switch=false;
+    if(action==='dry_run')c.dry_run=true; if(action==='live')c.dry_run=false;
+    data.status={...data.status,code:c.kill_switch?'stopped':c.dry_run?'dry_run':'live'};
+    return response(structuredClone(data));
+  }});
+  const d=w.document; const click=async mode=>{d.querySelector(`[data-mode=${mode}]`).click();await tick();await tick();await tick();};
+  assert.equal(d.querySelector('[data-mode=test]').getAttribute('aria-pressed'),'true');
+  await click('off');
+  assert.deepEqual(calls,['stop']);
+  assert.equal(d.querySelector('#operating-title').textContent,'Вимкнено');
+  assert.equal(d.querySelector('#pause-toggle').classList.contains('hidden'),true);
+  await click('test');
+  assert.deepEqual(calls,['stop','dry_run','resume']);
+  w.confirm=()=>false; await click('live');
+  assert.equal(calls.length,3,'live needs an explicit confirmation');
+  w.confirm=()=>true; await click('live');
+  assert.deepEqual(calls.slice(3),['live']);
+  assert.equal(d.querySelector('[data-mode=live]').getAttribute('aria-pressed'),'true');
+  await click('live');
+  assert.equal(calls.length,4,'choosing the current mode sends nothing');
+});
+
+test('R2: abandoned notifications are shown with a retry action',async t=>{
+  const data=structuredClone(base); data.status={...data.status,failed_notifications:2,last_error:'NOTIFICATION_FAILED'};
+  let retried=false;
+  const w=await screen(t,{data,handler:path=>{ if(path==='/api/v1/notifications/retry'){retried=true;return response({...data,status:{...data.status,failed_notifications:0,pending_notifications:2}});} }});
+  const attention=w.document.querySelector('#attention');
+  assert.equal(attention.classList.contains('hidden'),false);
+  assert.match(attention.textContent,/Сповіщення не доставлено\s*2/);
+  w.document.querySelector('#retry-notifications').click(); await tick(); await tick();
+  assert.equal(retried,true);
+  assert.equal(w.document.querySelector('#retry-notifications'),null);
+});
+
+test('home screen counts new contacts and opens them',async t=>{
+  const w=await screen(t,{handler:path=>path.startsWith('/api/v1/contacts')?response({items:[{...contact(1),configured:false},{...contact(2),configured:false},contact(3)],has_more:false}):null});
+  await tick();
+  const row=w.document.querySelector('#attention [data-view=contacts]');
+  assert.match(row.textContent,/Нові контакти\s*2/);
+  row.click(); await tick();
+  assert.equal(w.document.querySelector('[data-view-panel=contacts]').classList.contains('active'),true);
+});
+
+test('R3: rule preview says it ignores unsaved contact edits and names the template',async t=>{
+  let previewBody;
+  const w=await screen(t,{handler:(path,options)=>{
+    if(path==='/api/v1/preview'){previewBody=JSON.parse(options.body);return response({decision:'allowed',category:'general',template_code:'money_priority',forced_template:true,text:'x',dry_run:true,timezone:'Europe/Kyiv',source:'keywords',personal_schedule:false});}
+    if(path.startsWith('/api/v1/contacts'))return response({items:[contact(100)],has_more:false});
+  }});
+  const d=w.document;
+  d.querySelector('#navigation [data-view=contacts]').click(); await tick();
+  d.querySelector('[data-contact-id="100"]').click();
+  const form=d.querySelector('#contact-form');
+  form.elements.exclusion.value='forever';form.dispatchEvent(new w.Event('input',{bubbles:true}));
+  d.querySelector('#navigation [data-view=more]').click();
+  d.querySelector('[data-view=check]').click();
+  assert.match(d.querySelector('#preview-scope').textContent,/Контакт 100/);
+  const preview=d.querySelector('#preview-form');
+  preview.elements.text.value='Привіт';
+  preview.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await tick();await tick();
+  assert.equal(previewBody.contact_id,100);
+  const text=d.querySelector('#preview-result').textContent;
+  assert.match(text,/Незбережені зміни контакту не враховано/);
+  assert.match(text,/персональний для контакту/);
+});
+
+test('pages open from "Ще" and the back button returns there',async t=>{
+  const w=await screen(t);
+  const d=w.document;
+  assert.equal(d.querySelector('#back-button').classList.contains('hidden'),true);
+  d.querySelector('#navigation [data-view=more]').click();
+  d.querySelector('.list-row[data-view=escalation]').click();
+  assert.equal(d.querySelector('[data-view-panel=escalation]').classList.contains('active'),true);
+  assert.equal(d.querySelector('#page-title').textContent,'Платні звернення');
+  assert.equal(d.querySelector('#navigation [data-view=more]').classList.contains('active'),true);
+  assert.equal(d.querySelector('#back-button').classList.contains('hidden'),false);
+  d.querySelector('#back-button').click();
+  assert.equal(d.querySelector('[data-view-panel=more]').classList.contains('active'),true);
+  assert.equal(d.querySelector('#escalation-badge').textContent,'Вимкнено');
+  d.querySelector('#navigation [data-view=overview]').click();
+  d.querySelector('.list-row[data-view=schedule]').click();
+  d.querySelector('#back-button').click();
+  assert.equal(d.querySelector('[data-view-panel=overview]').classList.contains('active'),true,'back returns to the tab it came from');
+});
+
+test('an open contact replaces the list on a phone and back closes it',async t=>{
+  const w=await screen(t,{handler:path=>path.startsWith('/api/v1/contacts')?response({items:[contact(100)],has_more:false}):null});
+  const d=w.document;
+  d.querySelector('#navigation [data-view=contacts]').click(); await tick();
+  d.querySelector('[data-contact-id="100"]').click();
+  assert.equal(d.querySelector('#contact-layout').classList.contains('editing'),true);
+  assert.equal(d.querySelector('#page-title').textContent,'Контакт 100');
+  assert.equal(d.querySelector('#contact-form .exclusion-until').classList.contains('hidden'),true);
+  const form=d.querySelector('#contact-form');
+  form.elements.exclusion.value='until'; form.elements.exclusion[1].dispatchEvent(new w.Event('change',{bubbles:true}));
+  assert.equal(d.querySelector('#contact-form .exclusion-until').classList.contains('hidden'),false);
+  w.confirm=()=>true;
+  d.querySelector('#back-button').click();
+  assert.equal(d.querySelector('#contact-layout').classList.contains('editing'),false);
+  assert.equal(d.querySelector('#page-title').textContent,'Контакти');
+});
+
+test('delivery shows only the minimum of the chosen sender',async t=>{
+  const w=await screen(t);
+  const form=w.document.querySelector('#delivery-form');
+  const visible=name=>!form.elements[name].closest('label').classList.contains('hidden');
+  assert.equal(visible('bot_delay_seconds'),true);
+  assert.equal(visible('delay_min_seconds'),false);
+  form.elements.sender_identity.value='owner';
+  form.querySelector('[value=owner]').dispatchEvent(new w.Event('change',{bubbles:true}));
+  assert.equal(visible('bot_delay_seconds'),false);
+  assert.equal(visible('delay_min_seconds'),true);
+});
+
+test('save bar appears only with changes, except for a new contact',async t=>{
+  const w=await screen(t);
+  const form=w.document.querySelector('#schedule-form');
+  assert.equal(form.dataset.dirty===undefined||form.dataset.dirty==='false',true);
+  assert.equal(form.classList.contains('needs-save'),false);
+  w.document.querySelector('#add-schedule-window').click();
+  assert.equal(form.dataset.dirty,'true');
+});
+
+function classifierScreen(t, calls, {expand}={}) {
+  return screen(t, {handler: (path, options) => {
+    if (path === '/api/v1/classifier/expand') {
+      const body = JSON.parse(options.body); calls.push(['expand', body]);
+      if (expand) return expand(body);
+      return response({system_prompt:'Новий майстер-промпт для всіх типів звернень.', directions: body.directions.map(d => ({code:d.code,keywords:d.code==='general'?[]:d.code==='money'?['оплата']:['увійти','авторизац']}))});
+    }
+    if (path === '/api/v1/classifier') { const body = JSON.parse(options.body); calls.push(['save', body]); return response(body); }
+  }});
+}
+
+test('saving changed types refreshes the AI rules first, then saves once', async t => {
+  const calls = [];
+  const w = await classifierScreen(t, calls);
+  const doc = w.document;
+  doc.querySelector('#add-direction').click();
+  const card = [...doc.querySelectorAll('.direction-card')].at(-1);
+  assert.equal(doc.activeElement, card.querySelector('.direction-template'));
+  assert.equal(card.querySelector('.direction-more').open, true);
+  assert.equal(card.querySelector('.direction-priority'), null);
+  card.querySelector('.direction-label').value = 'Підтримка';
+  card.querySelector('.direction-description').value = 'Помилки в роботі';
+  card.querySelector('.direction-template').value = 'Перевірю';
+  const form = doc.querySelector('#classifier-form');
+  assert.equal(form.dataset.dirty, 'true');
+  assert.equal(form.dataset.promptStale, 'true');
+  assert.equal(doc.querySelector('#expand-classifier'), null);
+  form.dispatchEvent(new w.Event('submit', {bubbles:true,cancelable:true}));
+  await tick(); await tick(); await tick();
+  assert.deepEqual(calls.map(([kind]) => kind), ['expand', 'save']);
+  const saved = calls[1][1];
+  assert.equal(saved.directions.length, 3);
+  assert.equal(saved.directions[2].reply_template, 'Перевірю');
+  assert.equal('priority' in saved.directions[2], false);
+  assert.deepEqual(saved.directions[2].keywords, ['увійти','авторизац']);
+  assert.equal(saved.directions[0].reply_template, base.templates.off_hours_default);
+  assert.match(saved.system_prompt, /Новий майстер/);
+  assert.equal(form.dataset.dirty, 'false');
+});
+
+test('editing only a reply saves without touching the AI rules', async t => {
+  const calls = [];
+  const w = await classifierScreen(t, calls);
+  const doc = w.document;
+  const reply = doc.querySelector('[data-code="general"] .direction-template');
+  reply.value = 'Відповім зранку';
+  reply.dispatchEvent(new w.Event('input', {bubbles:true}));
+  const form = doc.querySelector('#classifier-form');
+  assert.equal(form.dataset.promptStale, 'false');
+  form.dispatchEvent(new w.Event('submit', {bubbles:true,cancelable:true}));
+  await tick(); await tick();
+  assert.deepEqual(calls.map(([kind]) => kind), ['save']);
+  assert.equal(calls[0][1].directions[0].reply_template, 'Відповім зранку');
+});
+
+test('a type cannot be saved without a name, description and reply', async t => {
+  const calls = [];
+  const w = await classifierScreen(t, calls);
+  const doc = w.document;
+  doc.querySelector('#add-direction').click();
+  const card = [...doc.querySelectorAll('.direction-card')].at(-1);
+  const form = doc.querySelector('#classifier-form');
+  form.dispatchEvent(new w.Event('submit', {bubbles:true,cancelable:true})); await tick();
+  assert.equal(calls.length, 0);
+  assert.match(doc.querySelector('#toast').textContent, /назву, опис і відповідь/);
+  card.querySelector('.direction-label').value = 'Підтримка';
+  card.querySelector('.direction-description').value = 'Проблеми зі входом';
+  const reply = card.querySelector('.direction-template');
+  reply.value = '   ';
+  card.querySelector('.direction-more').open = false;
+  form.dispatchEvent(new w.Event('submit', {bubbles:true,cancelable:true})); await tick();
+  assert.equal(calls.length, 0);
+  assert.equal(doc.activeElement, reply);
+  assert.match(doc.querySelector('#toast').textContent, /Додайте відповідь клієнту/);
+  assert.equal(doc.querySelector('[data-code="general"] .direction-template').required, true);
+});
+
+test('a failed AI refresh saves only with consent and keeps the manual instruction', async t => {
+  const calls = [];
+  const w = await classifierScreen(t, calls, {expand: () => response({detail:'ШІ недоступний'}, 503)});
+  const doc = w.document;
+  const form = doc.querySelector('#classifier-form');
+  form.elements.system_prompt.value = 'Моя вручну відредагована інструкція';
+  const toggle = doc.querySelector('[data-code="money"] .direction-active');
+  toggle.click();
+  w.confirm = () => false;
+  form.dispatchEvent(new w.Event('submit', {bubbles:true,cancelable:true})); await tick(); await tick(); await tick();
+  assert.deepEqual(calls.map(([kind]) => kind), ['expand']);
+  assert.equal(form.elements.system_prompt.value, 'Моя вручну відредагована інструкція');
+  assert.equal(form.dataset.dirty, 'true');
+  assert.equal(doc.querySelector('#save-classifier').textContent, 'Зберегти');
+  w.confirm = () => true;
+  form.dispatchEvent(new w.Event('submit', {bubbles:true,cancelable:true})); await tick(); await tick(); await tick();
+  assert.deepEqual(calls.map(([kind]) => kind), ['expand', 'expand', 'save']);
+  assert.equal(calls[2][1].system_prompt, 'Моя вручну відредагована інструкція');
+  assert.equal(calls[2][1].directions[1].is_active, false);
+});
+
+test('each type has a clear on/off switch and general cannot be switched off', async t => {
   const w = await screen(t);
   const doc = w.document;
   assert.equal(doc.querySelector('[data-code="general"] .direction-active'), null);
-  assert.match(doc.querySelector('[data-code="general"] .direction-state').textContent, /Завжди увімкнено/);
   const money = doc.querySelector('[data-code="money"]');
   assert.equal(money.querySelector('.direction-title').textContent, 'Гроші');
-  assert.equal(money.querySelector('.direction-state').textContent, 'Увімкнено');
   const toggle = money.querySelector('.direction-active');
+  assert.match(toggle.getAttribute('aria-label'), /Гроші/);
   toggle.click();
   assert.equal(money.classList.contains('is-off'), true);
-  assert.equal(money.querySelector('.direction-state').textContent, 'Вимкнено');
   assert.equal(doc.querySelector('#classifier-form').dataset.promptStale, 'true');
   const label = money.querySelector('.direction-label');
   label.value = 'Оплати';
@@ -366,21 +494,164 @@ test('each type shows a clear on/off state and general cannot be switched off', 
   assert.equal(money.querySelector('.direction-title').textContent, 'Оплати');
 });
 
-test('paid escalation is collapsed until opened and schedule override is a button', async t => {
-  const w = await screen(t);
-  const doc = w.document;
-  const details = doc.querySelector('#escalation-details');
-  assert.equal(details.open, false);
-  assert.ok(details.querySelector('summary #escalation-badge'));
-  assert.equal(doc.querySelector('#escalation-form').elements.enabled.closest('details'), details);
-  assert.equal(doc.querySelector('#add-contact-window').classList.contains('chip-button'), true);
+// --- Adversarial review of the minimal redesign -------------------------------
+
+test('after pausing, the button offers to lift the pause, and controls wait for each other',async t=>{
+  const data=structuredClone(base); data.connection.dry_run=false; data.status={...data.status,code:'live'};
+  const calls=[]; let release;
+  const w=await screen(t,{data,handler:async(path,options)=>{
+    if(path!=='/api/v1/control')return null;
+    calls.push(JSON.parse(options.body).action);
+    await new Promise(resolve=>{release=resolve;});
+    data.connection.muted_until='2026-09-05T20:30:00Z';
+    data.status={...data.status,code:'paused',muted_until:'2026-09-05T20:30:00Z'};
+    return response(structuredClone(data));
+  }});
+  const d=w.document; const pause=d.querySelector('#pause-toggle');
+  assert.equal(pause.textContent,'Пауза на 1 год');
+  pause.click(); await tick();
+  assert.equal(d.querySelector('[data-mode=off]').disabled,true,'other controls wait');
+  d.querySelector('[data-mode=off]').click(); pause.click(); await tick();
+  assert.deepEqual(calls,['pause']);
+  release(); await tick(); await tick(); await tick();
+  assert.equal(pause.textContent,'Зняти паузу');
+  assert.equal(pause.dataset.control,'resume');
+  assert.equal(d.querySelector('[data-mode=off]').disabled,false);
 });
 
-test('failed expansion preserves manually edited master prompt', async t => {
-  const w = await screen(t, {handler: path => path === '/api/v1/classifier/expand' ? response({detail:'ШІ недоступний'},503) : null});
-  const form = w.document.querySelector('#classifier-form');
-  form.elements.system_prompt.value = 'Моя вручну відредагована інструкція';
-  w.document.querySelector('#expand-classifier').click(); await tick(); await tick();
-  assert.equal(form.elements.system_prompt.value, 'Моя вручну відредагована інструкція');
-  assert.equal(w.document.querySelector('#expand-classifier').disabled, false);
+test('without the reply right the owner can still switch the bot off or to test',async t=>{
+  const data=structuredClone(base); data.connection.rights={can_reply:false};
+  data.status={...data.status,code:'inactive'};
+  const w=await screen(t,{data});
+  const d=w.document;
+  assert.equal(d.querySelector('[data-mode=off]').disabled,false);
+  assert.equal(d.querySelector('[data-mode=test]').disabled,false);
+  assert.equal(d.querySelector('[data-mode=live]').disabled,true);
+  assert.match(d.querySelector('#attention').textContent,/Немає права відповідати/);
+});
+
+test('the hidden sender minimum never blocks saving and is clamped for the server',async t=>{
+  let saved;
+  const w=await screen(t,{handler:(path,options)=>{ if(path==='/api/v1/delivery'){saved=JSON.parse(options.body);return response(saved);} }});
+  const form=w.document.querySelector('#delivery-form');
+  form.elements.bot_delay_seconds.value='75';
+  form.elements.sender_identity.value='owner';
+  form.querySelector('[value=owner]').dispatchEvent(new w.Event('change',{bubbles:true}));
+  assert.equal(form.elements.bot_delay_seconds.disabled,true);
+  assert.equal(form.elements.delay_min_seconds.disabled,false);
+  form.elements.delay_max_seconds.value='30';
+  assert.equal(form.checkValidity(),true);
+  form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true})); await tick(); await tick();
+  assert.equal(saved.sender_identity,'owner');
+  assert.equal(saved.bot_delay_seconds,30);
+  assert.equal(saved.delay_max_seconds,30);
+});
+
+test('the types form is locked while its rules are regenerated and saved',async t=>{
+  let release; const calls=[];
+  const w=await screen(t,{handler:async(path,options)=>{
+    if(path==='/api/v1/classifier/expand'){calls.push('expand'); await new Promise(r=>{release=r;}); const body=JSON.parse(options.body);
+      return response({system_prompt:'Нова інструкція для всіх типів звернень.',directions:body.directions.map(d=>({code:d.code,keywords:[]}))});}
+    if(path==='/api/v1/classifier'){calls.push('save'); return response(JSON.parse(options.body));}
+  }});
+  const doc=w.document; const form=doc.querySelector('#classifier-form');
+  doc.querySelector('[data-code="money"] .direction-active').click();
+  form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true})); await tick();
+  assert.equal(form.inert,true);
+  release(); await tick(); await tick(); await tick(); await tick();
+  assert.deepEqual(calls,['expand','save']);
+  assert.equal(form.inert,false);
+});
+
+test('a hand-edited AI instruction is replaced only after consent',async t=>{
+  const calls=[];
+  const w=await classifierScreen(t,calls);
+  const doc=w.document; const form=doc.querySelector('#classifier-form');
+  const prompt=form.elements.system_prompt;
+  prompt.value='Моя інструкція, яку я написав сам для класифікатора.'; prompt.dispatchEvent(new w.Event('input',{bubbles:true}));
+  doc.querySelector('[data-code="money"] .direction-active').click();
+  w.confirm=()=>false;
+  form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true})); await tick(); await tick(); await tick();
+  assert.deepEqual(calls,[],'declining keeps everything unsaved');
+  assert.equal(form.dataset.dirty,'true');
+  assert.equal(form.dataset.promptStale,'true');
+  assert.equal(prompt.value,'Моя інструкція, яку я написав сам для класифікатора.');
+  w.confirm=()=>true;
+  form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true})); await tick(); await tick(); await tick();
+  assert.deepEqual(calls.map(([kind])=>kind),['expand','save']);
+});
+
+test('types edited during an AI refresh are not saved with rules made for the old ones',async t=>{
+  let release; const calls=[];
+  const w=await screen(t,{handler:async(path,options)=>{
+    if(path==='/api/v1/classifier/expand'){calls.push('expand'); await new Promise(r=>{release=r;}); const body=JSON.parse(options.body);
+      return response({system_prompt:'Інструкція для старих типів звернень.',directions:body.directions.map(d=>({code:d.code,keywords:[]}))});}
+    if(path==='/api/v1/classifier'){calls.push('save'); return response(JSON.parse(options.body));}
+  }});
+  const doc=w.document; const form=doc.querySelector('#classifier-form');
+  doc.querySelector('[data-code="money"] .direction-active').click();
+  form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true})); await tick();
+  doc.querySelector('[data-code="money"] .direction-description').value='Змінено під час запиту';
+  release(); await tick(); await tick(); await tick(); await tick();
+  assert.deepEqual(calls,['expand']);
+  assert.match(doc.querySelector('#toast').textContent,/Типи змінилися під час оновлення/);
+  assert.equal(form.dataset.promptStale,'true');
+  assert.equal(form.inert,false);
+});
+
+test('checking a reply marks the check button busy, not the scope chip',async t=>{
+  let resolve;
+  const w=await screen(t,{handler:path=>{
+    if(path==='/api/v1/preview')return new Promise(r=>{resolve=()=>r(response({decision:'allowed',category:'general',template_code:'off_hours_default',forced_template:false,text:'x',dry_run:true,timezone:'Europe/Kyiv',source:'keywords',personal_schedule:false}));});
+    if(path.startsWith('/api/v1/contacts'))return response({items:[contact(100)],has_more:false});
+  }});
+  const d=w.document;
+  d.querySelector('#navigation [data-view=contacts]').click(); await tick();
+  d.querySelector('[data-contact-id="100"]').click();
+  d.querySelector('#navigation [data-view=more]').click();
+  d.querySelector('[data-view=check]').click();
+  const form=d.querySelector('#preview-form'); form.elements.text.value='Привіт';
+  form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true})); await tick();
+  assert.equal(form.querySelector('button[type=submit]').disabled,true);
+  assert.equal(d.querySelector('#preview-clear-contact').disabled,false);
+  resolve(); await tick(); await tick();
+});
+
+test('a deep link to a page returns to "Ще", and the log page shows diagnostics',async t=>{
+  const data=structuredClone(base); data.status={...data.status,last_error:'STALE_REPLY',summary_status:'error'};
+  const w=await screen(t,{data,url:'https://testserver/app/#logs',handler:path=>{
+    if(path.startsWith('/api/v1/contacts'))return response({items:[],has_more:false,next_offset:0});
+    if(path.startsWith('/api/v1/logs'))return response({items:[],has_more:false,next_offset:0});
+  }});
+  const d=w.document;
+  assert.equal(d.querySelector('#navigation [data-view=more]').classList.contains('active'),true);
+  assert.match(d.querySelector('#operating-history').textContent,/Запізнілу відповідь скасовано/);
+  d.querySelector('#back-button').click();
+  assert.equal(d.querySelector('[data-view-panel=more]').classList.contains('active'),true);
+  assert.match(d.querySelector('#attention').textContent,/Підсумок не надіслано/);
+});
+
+test('a new contact keeps its save bar, and saving it updates the home count',async t=>{
+  let configured=false;
+  const w=await screen(t,{handler:(path,options)=>{
+    if(path==='/api/v1/contacts/101'){configured=true;return response({...contact(101),...JSON.parse(options.body)});}
+    if(path.startsWith('/api/v1/contacts'))return response({items:[{...contact(101),configured}],has_more:false});
+  }});
+  const d=w.document; await tick();
+  assert.match(d.querySelector('#attention').textContent,/Нові контакти\s*1/);
+  d.querySelector('#navigation [data-view=contacts]').click(); await tick();
+  d.querySelector('[data-contact-id="101"]').click();
+  const form=d.querySelector('#contact-form');
+  assert.equal(form.classList.contains('needs-save'),true);
+  form.requestSubmit(); await tick(); await tick(); await tick();
+  assert.equal(form.classList.contains('needs-save'),false);
+  assert.equal(d.querySelector('#attention').classList.contains('hidden'),true);
+});
+
+test('connecting a channel by link does not leave the summary form unsaved',async t=>{
+  const w=await screen(t);
+  const form=w.document.querySelector('#summary-form');
+  const field=w.document.querySelector('#summary-channel-reference');
+  field.value='https://t.me/c/1/2'; field.dispatchEvent(new w.Event('input',{bubbles:true}));
+  assert.notEqual(form.dataset.dirty,'true');
 });

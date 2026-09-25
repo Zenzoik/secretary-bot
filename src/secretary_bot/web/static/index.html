@@ -9,309 +9,259 @@
     <meta property="og:description" content="Налаштування без зайвих кроків">
     <meta property="og:image" content="{{BASE_URL}}/assets/og.png">
     <title>Personal Secretary — налаштування</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260925-reply-types1">
+    <link rel="stylesheet" href="/assets/styles.css?v=20260925-minimal1">
     <script id="telegram-web-app-sdk" src="https://telegram.org/js/telegram-web-app.js?59" async></script>
     <script src="/assets/ui-utils.js?v=20260907-sdk-fallback1" defer></script>
-    <script src="/assets/app.js?v=20260925-reply-types1" defer></script>
+    <script src="/assets/app.js?v=20260925-minimal1" defer></script>
   </head>
   <body>
     <div class="app-shell" id="app" aria-busy="true">
-      <aside class="sidebar">
-        <a class="brand" href="#overview" aria-label="Personal Secretary">
-          <span class="brand-mark">PS</span>
-          <span><strong>Personal Secretary</strong><small>Панель власника</small></span>
-        </a>
-        <nav class="navigation" id="navigation" aria-label="Розділи">
-          <button data-view="overview"><span>01</span> Огляд</button>
-          <button data-view="schedule"><span>02</span> Розклад</button>
-          <button data-view="contacts"><span>03</span> Контакти</button>
-          <button data-view="classifier"><span>04</span> Типи звернень</button>
-          <button data-view="summary"><span>05</span> Підсумки</button>
-          <button data-view="analytics"><span>06</span> Аналітика</button>
-          <button data-view="logs"><span>07</span> Історія дій</button>
-          <button data-view="users" class="hidden" id="users-nav"><span>08</span> Користувачі</button>
-        </nav>
-        <div class="sidebar-footer">
-          <button class="text-button browser-link-action">Відкрити у браузері</button>
-          <button class="text-button hidden" id="logout">Вийти</button>
-        </div>
-      </aside>
+      <nav class="tabbar" id="navigation" aria-label="Розділи">
+        <span class="brand" aria-hidden="true"><span class="brand-mark">PS</span>Personal Secretary</span>
+        <button data-view="overview" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11.5 12 5l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5h-5v5H5a1 1 0 0 1-1-1z"/></svg><span>Головна</span></button>
+        <button data-view="contacts" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.5" r="3.5"/><path d="M5 19.5c.8-3.3 3.6-5 7-5s6.2 1.7 7 5"/></svg><span>Контакти</span></button>
+        <button data-view="classifier" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14a1 1 0 0 1 1 1V15a1 1 0 0 1-1 1h-8l-4.5 3.5V16H5a1 1 0 0 1-1-1V6.5a1 1 0 0 1 1-1z"/></svg><span>Відповіді</span></button>
+        <button data-view="more" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18" cy="12" r="1.3"/></svg><span>Ще</span></button>
+      </nav>
 
       <main class="workspace">
         <header class="topbar">
-          <div>
-            <p class="eyebrow" id="eyebrow">Панель керування</p>
-            <h1 id="page-title">Огляд</h1>
-          </div>
-          <div class="connection-pill" id="connection-pill">
-            <span class="pulse"></span><span>Завантаження</span>
-          </div>
+          <button class="back-button hidden" id="back-button" type="button" aria-label="Назад"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg></button>
+          <h1 id="page-title">Головна</h1>
         </header>
 
         <section class="loading-state" id="loading-state" aria-label="Завантаження">
           <div class="skeleton wide"></div>
-          <div class="skeleton-grid">
-            <div class="skeleton"></div><div class="skeleton"></div>
-          </div>
+          <div class="skeleton"></div>
           <div class="skeleton tall"></div>
         </section>
 
         <section class="auth-state hidden" id="auth-state">
-          <p class="eyebrow">Безпечний доступ</p>
           <h2>Відкрийте панель через бота</h2>
-          <p>У Telegram натисніть кнопку меню бота. Для браузера використайте одноразове посилання з уже авторизованої панелі.</p>
+          <p>Натисніть кнопку меню бота в Telegram.</p>
         </section>
 
-        <section id="load-error" class="panel hidden" role="alert">
-          <h2>Не вдалося завантажити панель</h2><p id="load-error-message"></p>
+        <section id="load-error" class="card hidden" role="alert">
+          <h2>Не вдалося завантажити панель</h2><p id="load-error-message" class="muted"></p>
           <button id="retry-load" class="primary" type="button">Спробувати ще раз</button>
         </section>
+
         <div id="views" class="hidden">
           <section class="view" data-view-panel="overview">
-            <section class="panel" aria-labelledby="operating-title">
-              <h2 id="operating-title">Стан секретаря</h2>
-              <p id="operating-note" aria-live="polite"></p>
-              <div class="quick-actions">
-                <button class="secondary" data-control="pause" type="button">Пауза на 1 годину</button>
-                <button class="secondary" data-control="resume" type="button">Відновити</button>
-                <button class="secondary" data-control="stop" type="button">Вимкнути</button>
-                <button class="secondary" data-control="dry_run" type="button">Лише тестові прев’ю</button>
-                <button class="primary" data-control="live" type="button">Увімкнути відповіді клієнтам</button>
-                <button class="secondary hidden" id="retry-notifications" type="button">Повторити недоставлені сповіщення</button>
+            <section class="card hero" aria-labelledby="operating-title">
+              <div class="status-line"><span class="status-dot" id="status-dot"></span><h2 id="operating-title">Перевіряємо стан</h2></div>
+              <p id="operating-note" class="muted" aria-live="polite"></p>
+              <div class="segmented mode-switch" role="group" aria-label="Режим секретаря">
+                <button type="button" data-mode="off">Вимкнено</button>
+                <button type="button" data-mode="test">Тест</button>
+                <button type="button" data-mode="live">Увімкнено</button>
               </div>
+              <p class="mode-hint muted" id="mode-hint"></p>
+              <button class="chip-button" id="pause-toggle" type="button"></button>
             </section>
-            <div class="status-grid" id="status-grid"></div>
-            <p id="operating-history" class="muted"></p>
-            <div class="mobile-web-action"><button class="secondary browser-link-action" type="button">Скопіювати вхід для браузера</button></div>
-            <form class="panel" id="delivery-form">
-              <div class="panel-heading">
-                <div><p class="eyebrow">Відповіді</p><h2>Спосіб доставки</h2></div>
-                <span class="section-note">Зміни діють без рестарту</span>
+            <section class="list hidden" id="attention" aria-label="Потребує уваги"></section>
+            <section class="list">
+              <button class="list-row" data-view="schedule" type="button"><span>Розклад</span><small id="home-schedule"></small></button>
+            </section>
+          </section>
+
+          <section class="view" data-view-panel="contacts">
+            <div class="contact-layout" id="contact-layout">
+              <div class="contact-browser">
+                <label class="search"><span class="visually-hidden">Пошук</span><input id="contact-search" type="search" placeholder="Пошук"></label>
+                <div class="contact-list" id="contact-list"></div>
+                <button id="more-contacts" type="button" class="chip-button hidden">Ще контакти</button>
               </div>
-              <div class="segmented" role="radiogroup" aria-label="Особистість відправника">
-                <label><input type="radio" name="sender_identity" value="bot"><span>Від секретаря</span></label>
-                <label><input type="radio" name="sender_identity" value="owner"><span>Від власника</span></label>
-              </div>
-              <div class="delay-block">
-                <div class="delay-copy">
-                  <strong>Затримка перед відповіддю</strong>
-                  <small>Час обирається випадково: окремий мінімум для кожного відправника та спільний максимум.</small>
+              <form class="contact-editor empty" id="contact-form">
+                <div id="contact-empty" class="muted">Оберіть контакт</div>
+                <div id="contact-fields" class="hidden">
+                  <h2 id="contact-title"></h2><p class="muted" id="contact-meta"></p>
+                  <p class="notice hidden" id="contact-setup-note">Новий контакт. Бот мовчить, доки ви не збережете правила.</p>
+                  <div class="field-group">
+                    <span class="field-label">Відповідати</span>
+                    <div class="segmented three" role="radiogroup" aria-label="Режим відповідей">
+                      <label><input type="radio" name="exclusion" value="none"><span>Так</span></label>
+                      <label><input type="radio" name="exclusion" value="until"><span>Пауза</span></label>
+                      <label><input type="radio" name="exclusion" value="forever"><span>Ні</span></label>
+                    </div>
+                    <label class="exclusion-until"><span>До <span id="exclusion-zone"></span></span><input name="exclusion_until" type="datetime-local"></label>
+                  </div>
+                  <div class="field-group contact-schedule">
+                    <div class="contact-schedule-heading">
+                      <div><span class="field-label">Розклад</span><small id="contact-schedule-source"></small></div>
+                      <div class="contact-schedule-actions">
+                        <button class="chip-button hidden" id="reset-contact-windows" type="button">Як основний</button>
+                        <button class="chip-button accent edit-icon" id="add-contact-window" type="button">Змінити</button>
+                      </div>
+                    </div>
+                    <div class="effective-schedule" id="contact-schedule-preview"></div>
+                    <div class="window-list hidden" id="contact-windows"></div>
+                  </div>
+                  <div class="form-actions"><button class="primary" type="submit">Зберегти</button></div>
                 </div>
-                <div class="delay-ranges" aria-live="polite">
-                  <div><span>Від секретаря</span><strong id="bot-delay-range">—</strong></div>
-                  <div><span>Від власника</span><strong id="owner-delay-range">—</strong></div>
+              </form>
+            </div>
+          </section>
+
+          <section class="view" data-view-panel="classifier">
+            <form id="classifier-form">
+              <div class="direction-list" id="direction-list"></div>
+              <button class="chip-button add-button" type="button" id="add-direction">+ Тип звернення</button>
+              <details class="advanced">
+                <summary>Розширені</summary>
+                <label>Інструкція для ШІ<textarea name="system_prompt" rows="10" maxlength="8000" required></textarea><small>Оновлюється автоматично, коли змінюються типи.</small></label>
+                <div class="form-grid two">
+                  <label>Модель<input name="model" maxlength="100" required></label>
+                  <label>Поріг упевненості<input name="confidence_min" type="number" min="0" max="1" step="0.01" required></label>
                 </div>
-                <div class="form-grid three">
-                  <label>Мінімум секретаря, с<input name="bot_delay_seconds" type="number" min="1" max="60" required></label>
-                  <label>Мінімум власника, с<input name="delay_min_seconds" type="number" min="0" max="3600" required></label>
-                  <label>Спільний максимум, с<input name="delay_max_seconds" type="number" min="1" max="3600" required></label>
-                </div>
-              </div>
-              <label class="switch-row"><span><strong>Позначати прочитаним</strong><small>Тільки після успішної відповіді</small></span><input name="mark_read" type="checkbox" role="switch"></label>
-              <label>Максимум автовідповідей одному контакту за неробоче вікно
-                <input name="max_auto_replies_per_window" type="number" min="0" max="100" required>
-                <small>0 — без обмежень: бот обробляє кожне підтримуване повідомлення.</small>
-              </label>
-              <div class="form-actions"><button class="primary" type="submit">Зберегти доставку</button></div>
+              </details>
+              <div class="form-actions"><button class="primary" id="save-classifier" type="submit">Зберегти</button></div>
             </form>
-            <form class="panel collapsible-panel" id="escalation-form">
-              <details id="escalation-details">
-              <summary class="panel-heading collapsible-summary">
-                <div><p class="eyebrow">Поза графіком</p><h2>Платне термінове звернення</h2></div>
-                <span class="collapsible-state"><span class="badge neutral" id="escalation-badge">Вимкнено</span><span class="chevron" aria-hidden="true"></span></span>
-              </summary>
-              <p class="muted">Після звичайної автовідповіді клієнт побачить кнопку «Терміново». Платне звернення зараховується лише після окремого підтвердження ціни.</p>
-              <label class="switch-row"><span><strong>Дозволити платну ескалацію</strong><small>Без підтвердження клієнта лічильник не збільшується</small></span><input name="enabled" type="checkbox" role="switch"></label>
+          </section>
+
+          <section class="view" data-view-panel="more">
+            <section class="list">
+              <button class="list-row" data-view="schedule" type="button"><span>Розклад</span><small id="more-schedule"></small></button>
+              <button class="list-row" data-view="delivery" type="button"><span>Доставка</span><small id="more-delivery"></small></button>
+              <button class="list-row" data-view="summary" type="button"><span>Щоденний підсумок</span><small id="retention-badge"></small></button>
+              <button class="list-row" data-view="escalation" type="button"><span>Платні звернення</span><small id="escalation-badge"></small></button>
+            </section>
+            <section class="list">
+              <button class="list-row" data-view="analytics" type="button"><span>Аналітика</span></button>
+              <button class="list-row" data-view="logs" type="button"><span>Історія дій</span></button>
+              <button class="list-row" data-view="check" type="button"><span>Перевірити відповідь</span></button>
+              <button class="list-row hidden" data-view="users" id="users-nav" type="button"><span>Користувачі</span></button>
+            </section>
+            <section class="list">
+              <button class="list-row plain browser-link-action" type="button"><span>Скопіювати вхід для браузера</span></button>
+              <button class="list-row plain danger hidden" id="logout" type="button"><span>Вийти</span></button>
+            </section>
+          </section>
+
+          <section class="view" data-view-panel="schedule">
+            <form id="schedule-form">
+              <p class="muted page-hint">Коли бот відповідає замість вас.</p>
+              <div class="window-list" id="schedule-windows"></div>
+              <button class="chip-button add-button" id="add-schedule-window" type="button">+ Інтервал</button>
+              <label class="field-compact">Часовий пояс<select name="timezone" id="timezone-select"></select></label>
+              <div class="form-actions"><button class="primary" type="submit">Зберегти</button></div>
+            </form>
+          </section>
+
+          <section class="view" data-view-panel="delivery">
+            <form id="delivery-form">
+              <div class="field-group">
+                <span class="field-label">Від кого відповідь</span>
+                <div class="segmented" role="radiogroup" aria-label="Відправник">
+                  <label><input type="radio" name="sender_identity" value="bot"><span>Секретар</span></label>
+                  <label><input type="radio" name="sender_identity" value="owner"><span>Ви</span></label>
+                </div>
+              </div>
+              <div class="field-group">
+                <span class="field-label">Затримка перед відповіддю, секунд</span>
+                <div class="form-grid two">
+                  <label class="delay-bot">Від<input name="bot_delay_seconds" type="number" min="1" max="60" required></label>
+                  <label class="delay-owner">Від<input name="delay_min_seconds" type="number" min="0" max="3600" required></label>
+                  <label>До<input name="delay_max_seconds" type="number" min="1" max="3600" required></label>
+                </div>
+                <p class="muted delay-ranges"><span class="delay-bot">Секретар відповідає за <span id="bot-delay-range">—</span></span><span class="delay-owner">Ви відповідаєте за <span id="owner-delay-range">—</span></span></p>
+              </div>
+              <label class="switch-row"><span>Позначати прочитаним</span><input name="mark_read" type="checkbox" role="switch"></label>
+              <label class="field-compact">Відповідей одному контакту за вікно<input name="max_auto_replies_per_window" type="number" min="0" max="100" required><small>0 — без обмежень</small></label>
+              <div class="form-actions"><button class="primary" type="submit">Зберегти</button></div>
+            </form>
+          </section>
+
+          <section class="view" data-view-panel="escalation">
+            <form id="escalation-form">
+              <p class="muted page-hint">Клієнт зможе оплатити термінову відповідь поза графіком.</p>
+              <label class="switch-row"><span>Увімкнути</span><input name="enabled" type="checkbox" role="switch"></label>
               <div class="form-grid two">
                 <label>Ціна<input name="price_amount" type="number" min="0" max="1000000000" step="0.01" required></label>
                 <label>Валюта<input name="currency" minlength="3" maxlength="8" pattern="[A-Z]{3,8}" placeholder="UAH" required></label>
               </div>
-              <label>Текст пропозиції<textarea name="offer_text" rows="3" maxlength="1000" required></textarea></label>
-              <label>Текст після підтвердження<textarea name="confirm_text" rows="3" maxlength="1000" required></textarea></label>
-              <label>Текст відмови власника<textarea name="decline_text" rows="3" maxlength="1000" required></textarea></label>
-              <div class="form-actions"><button class="primary" type="submit">Зберегти ескалацію</button></div>
-              </details>
-            </form>
-          </section>
-
-          <section class="view" data-view-panel="schedule">
-            <form class="panel" id="schedule-form">
-              <div class="panel-heading">
-                <div><p class="eyebrow">Автовідповідь</p><h2>Неробочі години</h2></div>
-                <button class="secondary" id="add-schedule-window" type="button">+ Додати вікно</button>
-              </div>
-              <label class="field-compact">Часовий пояс<select name="timezone" id="timezone-select"></select></label>
-              <div class="window-list" id="schedule-windows"></div>
-              <div class="form-actions"><button class="primary" type="submit">Зберегти розклад</button></div>
-            </form>
-          </section>
-
-          <section class="view" data-view-panel="contacts">
-            <div class="panel">
-              <div class="panel-heading">
-                <div><p class="eyebrow">Персональні правила</p><h2>Контакти</h2></div>
-                <label class="search"><span>Пошук</span><input id="contact-search" type="search" placeholder="Ім’я або @username"></label>
-              </div>
-              <div class="contact-layout">
-                <div><div class="contact-list" id="contact-list"></div><button id="more-contacts" type="button" class="secondary hidden">Ще контакти</button></div>
-                <form class="contact-editor empty" id="contact-form">
-                  <div id="contact-empty">Оберіть контакт, щоб змінити правила.</div>
-                  <div id="contact-fields" class="hidden">
-                    <p class="eyebrow">Контакт</p><h3 id="contact-title"></h3><p class="muted" id="contact-meta"></p>
-                    <p class="neutral hidden" id="contact-setup-note">Новий контакт: бот не відповідає йому, доки ви не збережете правила. Перевірте режим і розклад та натисніть «Зберегти контакт».</p>
-                    <fieldset><legend>Режим відповідей</legend>
-                      <label><input type="radio" name="exclusion" value="none"> Відповідати за розкладом нижче</label>
-                      <label><input type="radio" name="exclusion" value="until"> Призупинити до дати</label>
-                      <label><input type="radio" name="exclusion" value="forever"> Ніколи не відповідати</label>
-                      <input name="exclusion_until" type="datetime-local" aria-label="До якої дати">
-                    </fieldset>
-                    <div class="subheading contact-schedule-heading">
-                      <div><strong>Коли бот відповідає</strong><small id="contact-schedule-source"></small></div>
-                      <div class="contact-schedule-actions">
-                        <button class="chip-button hidden" id="reset-contact-windows" type="button">Використати основний</button>
-                        <button class="chip-button accent edit-icon" id="add-contact-window" type="button">Змінити для контакту</button>
-                      </div>
-                    </div>
-                    <div class="effective-schedule" id="contact-schedule-preview"></div>
-                    <div class="window-list compact hidden" id="contact-windows"></div>
-                    <div class="form-actions"><button class="primary" type="submit">Зберегти контакт</button></div>
-                  </div>
-                </form>
-              </div>
-            </div>
-            <form class="panel" id="preview-form">
-              <h2>Перевірити правило без надсилання</h2>
-              <p class="muted">Для обраного контакту або основного розкладу. Тип визначається за ключовими словами; ШІ може обрати інакше. Текст не зберігається.</p>
-              <label>Приклад повідомлення<textarea name="text" rows="3" maxlength="2000" required></textarea></label>
-              <button type="submit" class="secondary">Перевірити</button>
-              <p id="preview-result" aria-live="polite"></p>
-            </form>
-          </section>
-
-          <section class="view" data-view-panel="classifier">
-            <form class="panel" id="classifier-form">
-              <div class="panel-heading"><div><p class="eyebrow">Розпізнавання й відповіді</p><h2>Типи звернень</h2></div></div>
-              <section class="classifier-step" aria-labelledby="classifier-step-types">
-                <div class="classifier-step-heading">
-                  <span class="step-number">1</span>
-                  <div><strong id="classifier-step-types">Опишіть типи звернень</strong><small>Кожен тип — це опис повідомлень і відповідь, яку отримає клієнт. Вимкнений тип не розпізнається: такі повідомлення отримають відповідь звичайного звернення.</small></div>
-                </div>
-                <div class="direction-list" id="direction-list"></div>
-                <div class="classifier-toolbar"><button class="secondary" type="button" id="add-direction">+ Додати тип звернення</button></div>
-              </section>
-              <section class="classifier-step generation-step" id="classifier-generation-step" aria-labelledby="classifier-step-generate">
-                <div class="classifier-step-heading">
-                  <span class="step-number">2</span>
-                  <div><strong id="classifier-step-generate">Згенеруйте правила розпізнавання</strong><small>ШІ створить спільний майстер-промпт і підбере ключові слова. Дані збережуться лише на останньому кроці.</small></div>
-                </div>
-                <div class="generation-action">
-                  <p id="classifier-generation-status" role="status"></p>
-                  <button class="primary" type="button" id="expand-classifier">Згенерувати правила для типів</button>
-                </div>
-              </section>
-              <section class="classifier-step" aria-labelledby="classifier-step-review">
-                <div class="classifier-step-heading">
-                  <span class="step-number">3</span>
-                  <div><strong id="classifier-step-review">Перевірте результат</strong><small>За потреби відредагуйте майстер-промпт і ключові слова в картках типів.</small></div>
-                </div>
-                <label>Майстер-промпт для визначення типу звернення<textarea name="system_prompt" rows="10" maxlength="8000" required></textarea></label>
-              </section>
-              <details><summary>Розширені налаштування</summary>
-              <div class="form-grid two">
-                <label>Модель<input name="model" maxlength="100" required></label>
-                <label>Поріг упевненості<input name="confidence_min" type="number" min="0" max="1" step="0.01" required></label>
-              </div>
-              </details>
-              <section class="classifier-step classifier-save" aria-labelledby="classifier-step-save">
-                <div class="classifier-step-heading">
-                  <span class="step-number">4</span>
-                  <div><strong id="classifier-step-save">Збережіть налаштування</strong><small id="classifier-save-hint">Після збереження нові типи почнуть використовуватися класифікатором.</small></div>
-                </div>
-                <div class="form-actions"><button class="primary" id="save-classifier" type="submit">Зберегти типи звернень</button></div>
-              </section>
+              <label>Пропозиція<textarea name="offer_text" rows="3" maxlength="1000" required></textarea></label>
+              <label>Після оплати<textarea name="confirm_text" rows="3" maxlength="1000" required></textarea></label>
+              <label>Якщо ви відмовили<textarea name="decline_text" rows="3" maxlength="1000" required></textarea></label>
+              <div class="form-actions"><button class="primary" type="submit">Зберегти</button></div>
             </form>
           </section>
 
           <section class="view" data-view-panel="summary">
-            <form class="panel narrow" id="summary-form">
-              <div class="panel-heading"><div><p class="eyebrow">Зберігання та доставка</p><h2>Щоденний підсумок</h2></div><span class="badge neutral" id="retention-badge">Вимкнено</span></div>
-              <p class="muted">Для підсумку бот тимчасово зберігає лише тексти повідомлень. Тексти зашифровані окремим ключем і автоматично видаляються не пізніше ніж через 48 годин.</p>
-              <label class="switch-row retention-switch"><span><strong>Зберігати тексти для підсумку</strong><small>Вимкнення одразу видалить усі збережені тексти. Відповіді бота продовжать працювати.</small></span><input name="message_retention_enabled" type="checkbox" role="switch" aria-describedby="retention-stats"></label>
-              <p class="retention-stats" id="retention-stats" aria-live="polite"></p>
-              <label>Локальний час<input name="summary_time" type="time" required></label>
+            <form id="summary-form">
+              <label class="switch-row"><span>Надсилати підсумок<small>Тексти зберігаються зашифровано до 48 год</small></span><input name="message_retention_enabled" type="checkbox" role="switch" aria-describedby="retention-stats"></label>
+              <p class="muted" id="retention-stats" aria-live="polite"></p>
+              <label class="field-compact">Час<input name="summary_time" type="time" required></label>
               <input name="summary_channel_id" type="hidden">
-              <section class="channel-connect" aria-labelledby="summary-channel-heading">
+              <section class="field-group channel-connect" aria-labelledby="summary-channel-heading">
                 <div class="channel-connect-heading">
-                  <div>
-                    <strong id="summary-channel-heading">Канал доставки</strong>
-                    <small id="summary-channel-state" aria-live="polite">Канал не підключено — підсумок надходитиме в особистий чат.</small>
-                  </div>
-                  <button class="text-button hidden" id="disconnect-summary-channel" type="button">Відключити</button>
+                  <div><span class="field-label" id="summary-channel-heading">Куди</span><small id="summary-channel-state" aria-live="polite"></small></div>
+                  <button class="chip-button danger hidden" id="disconnect-summary-channel" type="button">Відключити</button>
                 </div>
-                <button class="secondary channel-picker" id="choose-summary-channel" type="button">Обрати або створити канал у Telegram</button>
+                <button class="secondary channel-picker" id="choose-summary-channel" type="button">Обрати канал</button>
                 <details class="channel-fallback" id="summary-channel-fallback">
                   <summary>Підключити за посиланням</summary>
-                  <p class="muted">Для закритого каналу скопіюйте посилання на будь-який його допис. Бот має бути адміністратором із правом публікації.</p>
+                  <p class="muted">Посилання на будь-який допис каналу. Бот має бути адміністратором.</p>
                   <div class="inline-field">
-                    <label>Посилання на допис або @username<input id="summary-channel-reference" type="text" inputmode="url" maxlength="500" placeholder="https://t.me/c/1234567890/5"></label>
-                    <button class="secondary" id="connect-summary-channel-link" type="button">Перевірити й підключити</button>
+                    <label><span class="visually-hidden">Посилання на допис або @username</span><input id="summary-channel-reference" data-no-dirty type="text" inputmode="url" maxlength="500" placeholder="https://t.me/c/1234567890/5"></label>
+                    <button class="secondary" id="connect-summary-channel-link" type="button">Підключити</button>
                   </div>
                 </details>
               </section>
-              <div class="form-actions"><button class="primary" type="submit">Зберегти підсумок</button></div>
+              <div class="form-actions"><button class="primary" type="submit">Зберегти</button></div>
             </form>
           </section>
 
           <section class="view" data-view-panel="analytics">
-            <div class="panel">
-              <div class="panel-heading">
-                <div><p class="eyebrow">Статистика за період</p><h2>Аналітика контактів</h2></div>
-                <span class="section-note" id="analytics-timezone"></span>
-              </div>
-              <form class="filter-bar analytics-filter" id="analytics-filter">
-                <label>Від<input name="date_from" type="date" required></label>
-                <label>До<input name="date_to" type="date" required></label>
-                <button class="secondary" type="submit">Показати</button>
-              </form>
-              <div class="analytics-totals" id="analytics-totals" aria-live="polite"></div>
-              <div class="table-wrap">
-                <table class="analytics-table">
-                  <thead><tr><th>Контакт</th><th>Повідомлення</th><th>Вхідні / вихідні</th><th>Звичайні</th><th>Платні</th><th>Сума</th><th>Напрямки</th><th>Питання задано / закрито</th></tr></thead>
-                  <tbody id="analytics-rows"></tbody>
-                </table>
-              </div>
-              <section class="pdf-export" aria-labelledby="pdf-export-title">
-                <div><strong id="pdf-export-title">Місячний PDF-звіт</strong><small id="pdf-export-note">Містить усі контакти та ті самі перевірені показники.</small></div>
-                <label>Звітний місяць<select id="analytics-month" required></select></label>
-                <button class="secondary" id="download-monthly-pdf" type="button">Відкрити PDF</button>
-              </section>
+            <form class="filter-bar" id="analytics-filter">
+              <label>Від<input name="date_from" type="date" required></label>
+              <label>До<input name="date_to" type="date" required></label>
+              <button class="secondary" type="submit">Показати</button>
+            </form>
+            <p class="muted" id="analytics-timezone"></p>
+            <div class="analytics-totals" id="analytics-totals" aria-live="polite"></div>
+            <div class="table-wrap">
+              <table class="analytics-table">
+                <thead><tr><th>Контакт</th><th>Повідомлення</th><th>Вхідні / вихідні</th><th>Звичайні</th><th>Платні</th><th>Сума</th><th>Типи</th><th>Питання задано / закрито</th></tr></thead>
+                <tbody id="analytics-rows"></tbody>
+              </table>
             </div>
+            <section class="card pdf-export" aria-labelledby="pdf-export-title">
+              <div><strong id="pdf-export-title">PDF за місяць</strong><small id="pdf-export-note"></small></div>
+              <label><span class="visually-hidden">Звітний місяць</span><select id="analytics-month" required></select></label>
+              <button class="secondary" id="download-monthly-pdf" type="button">Відкрити PDF</button>
+            </section>
           </section>
 
           <section class="view" data-view-panel="logs">
-            <div class="panel">
-              <div class="panel-heading"><div><p class="eyebrow">Останні 30 днів</p><h2>Історія дій</h2></div><span class="section-note" id="log-timezone"></span></div>
-              <form class="filter-bar" id="log-filter">
-                <label>Контакт<select name="contact_id"><option value="">Усі контакти</option></select></label>
-                <label>Дія<select name="action"><option value="">Усі дії</option></select></label>
-                <button class="secondary" type="submit">Застосувати</button>
-              </form>
-              <div class="table-wrap"><table><thead><tr><th>Час</th><th>Контакт</th><th>Дія</th><th>Тип звернення</th><th>Деталі</th></tr></thead><tbody id="log-rows"></tbody></table></div>
-              <button id="more-logs" type="button" class="secondary hidden">Раніші записи</button>
-            </div>
+            <div class="diagnostics" id="operating-history" aria-label="Стан"></div>
+            <form class="filter-bar" id="log-filter">
+              <label>Контакт<select name="contact_id"><option value="">Усі</option></select></label>
+              <label>Дія<select name="action"><option value="">Усі</option></select></label>
+              <button class="secondary" type="submit">Показати</button>
+            </form>
+            <p class="muted" id="log-timezone"></p>
+            <div class="table-wrap"><table><thead><tr><th>Час</th><th>Контакт</th><th>Дія</th><th>Тип</th><th>Деталі</th></tr></thead><tbody id="log-rows"></tbody></table></div>
+            <button id="more-logs" type="button" class="chip-button hidden">Раніші записи</button>
           </section>
+
+          <section class="view" data-view-panel="check">
+            <form id="preview-form">
+              <div class="preview-scope"><p class="muted" id="preview-scope"></p><button class="chip-button hidden" id="preview-clear-contact" type="button">Основний розклад</button></div>
+              <label>Повідомлення<textarea name="text" rows="3" maxlength="2000" required></textarea></label>
+              <button type="submit" class="primary">Перевірити</button>
+              <p id="preview-result" class="preview-result" aria-live="polite"></p>
+            </form>
+          </section>
+
           <section class="view" data-view-panel="users">
-            <div class="panel">
-              <div class="panel-heading"><div><p class="eyebrow">Доступ</p><h2>Запрошення</h2></div></div>
-              <p class="muted">Створіть одноразове посилання та надішліть його людині. Після відкриття посилання заявка з’явиться нижче.</p>
-              <button class="primary" id="create-invite" type="button">Створити посилання</button>
+            <section class="card">
+              <button class="primary" id="create-invite" type="button">Створити запрошення</button>
               <div id="invite-result" class="invite-result hidden"><input id="invite-url" aria-label="Посилання-запрошення" readonly><button class="secondary" id="copy-invite" type="button">Скопіювати</button></div>
-              <p class="muted">Посилання діє 24 години і доступне лише одному користувачу.</p>
-            </div>
-            <div class="panel">
-              <div class="panel-heading"><div><p class="eyebrow">Заявки та доступ</p><h2>Користувачі</h2></div><button class="secondary" id="refresh-users" type="button">Оновити</button></div>
-              <div id="access-users" class="access-users" aria-live="polite"></div>
-            </div>
+              <p class="muted">Одноразове, діє 24 години.</p>
+            </section>
+            <div class="section-heading"><h2>Користувачі</h2><button class="chip-button" id="refresh-users" type="button">Оновити</button></div>
+            <div id="access-users" class="access-users" aria-live="polite"></div>
           </section>
         </div>
       </main>
@@ -323,8 +273,8 @@
         <label>Дні<select class="weekday-mask"><option value="127">Щодня</option><option value="31">Будні</option><option value="96">Вихідні</option><option value="1">Понеділок</option><option value="2">Вівторок</option><option value="4">Середа</option><option value="8">Четвер</option><option value="16">П’ятниця</option><option value="32">Субота</option><option value="64">Неділя</option></select></label>
         <label>Від<input class="time-from" type="time" required></label>
         <label>До<input class="time-to" type="time" required></label>
-        <label class="tiny-switch" title="Активне вікно"><input class="is-active" type="checkbox" checked><span>Активне</span></label>
-        <button class="icon-button remove-window" type="button" aria-label="Видалити вікно">×</button>
+        <label class="tiny-switch" title="Активне вікно"><input class="is-active" type="checkbox" role="switch" aria-label="Активне" checked></label>
+        <button class="icon-button remove-window" type="button" aria-label="Видалити інтервал">×</button>
       </div>
     </template>
   </body>
